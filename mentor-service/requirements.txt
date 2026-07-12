@@ -1,0 +1,8 @@
+# The mentor brain and CLI demo use only the Python standard library.
+# These are needed only to run the HTTP service (server.py):
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+
+# Dev / testing only:
+pytest>=8.0

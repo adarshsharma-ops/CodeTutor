@@ -1,0 +1,64 @@
+{
+  "id": "python-foundations",
+  "version": "1.0.0",
+  "title": "Python Foundations",
+  "audience": "First-time Python learners",
+  "promise": "Build small Python programs while understanding every decision.",
+  "modules": [
+    {
+      "id": "values-and-variables",
+      "title": "Values and names",
+      "prerequisites": [],
+      "concepts": ["variables"],
+      "mental_model": "A variable is a readable name attached to a value so you can use or change that value later.",
+      "evidence": ["assigns a value to a meaningful name", "uses the name in a later expression"],
+      "common_mistakes": ["uses a name before assigning it", "confuses text and numbers"],
+      "understanding_checks": ["What value does this name hold now?", "What changes after this assignment?"],
+      "projects": ["temperature converter", "bill splitter"]
+    },
+    {
+      "id": "decisions",
+      "title": "Making decisions",
+      "prerequisites": ["values-and-variables"],
+      "concepts": ["conditionals"],
+      "mental_model": "A condition is a yes-or-no question that lets Python choose which instructions to run.",
+      "evidence": ["writes a condition", "explains which branch runs for an example input"],
+      "common_mistakes": ["uses assignment instead of comparison", "creates overlapping or unreachable branches"],
+      "understanding_checks": ["What question is Python answering here?", "Which branch runs for this value, and why?"],
+      "projects": ["age-based ticket price", "password-strength checker"]
+    },
+    {
+      "id": "collections-and-loops",
+      "title": "Collections and repetition",
+      "prerequisites": ["values-and-variables", "decisions"],
+      "concepts": ["lists", "dicts", "loops"],
+      "mental_model": "A collection holds related values; a loop asks Python to repeat the same instructions for each value.",
+      "evidence": ["creates a collection", "uses a loop variable", "places repeated work inside the loop", "preserves accumulated state"],
+      "common_mistakes": ["puts repeated work outside the loop", "resets a total or collection inside the loop", "returns during the first iteration"],
+      "understanding_checks": ["Which lines repeat?", "What does the loop variable hold each time?", "Which value must survive between repetitions?"],
+      "projects": ["expense summary", "word counter", "number guessing game"]
+    },
+    {
+      "id": "functions",
+      "title": "Reusable responsibilities",
+      "prerequisites": ["collections-and-loops"],
+      "concepts": ["functions"],
+      "mental_model": "A function gives one responsibility a name, accepts the information it needs, and can return a result.",
+      "evidence": ["defines and calls a function", "uses parameters", "returns and consumes a result"],
+      "common_mistakes": ["defines but never calls the function", "prints when the caller needs a returned value", "returns too early"],
+      "understanding_checks": ["What information enters this function?", "What responsibility does it own?", "Who uses its result?"],
+      "projects": ["unit conversion toolkit", "text statistics library"]
+    },
+    {
+      "id": "errors-files-and-modules",
+      "title": "Programs that meet the real world",
+      "prerequisites": ["functions"],
+      "concepts": ["exceptions", "file_io"],
+      "mental_model": "Real programs receive imperfect input; they need clear boundaries for reading data, handling expected failure, and organizing reusable code.",
+      "evidence": ["handles a specific expected error", "reads or writes a file safely", "imports reusable code"],
+      "common_mistakes": ["catches every error", "assumes a file always exists", "hard-codes secrets or machine-specific paths"],
+      "understanding_checks": ["What can fail here?", "Which errors should this code handle?", "What belongs outside the source code?"],
+      "projects": ["notes saved to a file", "CSV summary tool", "log analyzer"]
+    }
+  ]
+}

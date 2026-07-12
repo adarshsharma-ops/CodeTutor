@@ -1,0 +1,87 @@
+{
+  "id": "python-for-data",
+  "version": "1.0.0",
+  "title": "Python for Data",
+  "audience": "Python learners preparing for data and ML work",
+  "promise": "Turn raw, imperfect data into trustworthy evidence you can explain.",
+  "pathway_prerequisites": ["python-foundations:functions", "python-foundations:errors-files-and-modules"],
+  "modules": [
+    {
+      "id": "tabular-mental-model",
+      "title": "Rows, columns, and DataFrames",
+      "prerequisites": [],
+      "concepts": ["dataframes"],
+      "mental_model": "A DataFrame is like a spreadsheet with named columns, but Python can apply repeatable rules to every row.",
+      "evidence": ["creates or inspects a DataFrame", "explains what one row and one column represent"],
+      "common_mistakes": ["assumes every column has the expected type", "changes data without checking the result"],
+      "understanding_checks": ["What does one row represent?", "What does each column mean?"],
+      "projects": ["inspect a synthetic support-ticket dataset"]
+    },
+    {
+      "id": "load-and-inspect",
+      "title": "Load and inspect data",
+      "prerequisites": ["tabular-mental-model"],
+      "concepts": ["data_loading", "file_io", "json"],
+      "mental_model": "Loading data translates an external file into Python values; inspection checks whether that translation matches your expectations.",
+      "evidence": ["loads CSV or JSON", "checks shape, columns, types, and sample rows"],
+      "common_mistakes": ["trusts the file without inspection", "uses machine-specific paths", "loads real sensitive data into examples"],
+      "understanding_checks": ["How many records loaded?", "Which assumption did you verify first?"],
+      "projects": ["load and profile a synthetic email-volume dataset"]
+    },
+    {
+      "id": "select-and-filter",
+      "title": "Select and filter",
+      "prerequisites": ["load-and-inspect"],
+      "concepts": ["dataframes", "conditionals"],
+      "mental_model": "Selection chooses which information to keep; filtering asks a yes-or-no question of every row.",
+      "evidence": ["selects columns intentionally", "filters rows and explains the condition"],
+      "common_mistakes": ["confuses row filtering with column selection", "silently drops needed records"],
+      "understanding_checks": ["Which rows survive this condition?", "Which information did you intentionally remove?"],
+      "projects": ["find high-priority synthetic support tickets"]
+    },
+    {
+      "id": "clean-and-validate",
+      "title": "Clean and validate",
+      "prerequisites": ["select-and-filter"],
+      "concepts": ["data_cleaning", "exceptions"],
+      "mental_model": "Cleaning is not hiding bad data; it is making explicit decisions about missing, duplicated, or invalid values.",
+      "evidence": ["measures missing values", "handles duplicates", "documents a cleaning decision", "checks the result"],
+      "common_mistakes": ["drops missing rows without understanding why", "fills missing values with an unjustified default", "changes types without checking failures"],
+      "understanding_checks": ["What information could this cleaning step destroy?", "Why is this replacement defensible?"],
+      "projects": ["clean a deliberately messy synthetic dataset"]
+    },
+    {
+      "id": "group-and-summarize",
+      "title": "Group and summarize",
+      "prerequisites": ["clean-and-validate"],
+      "concepts": ["aggregation", "dataframes"],
+      "mental_model": "Grouping creates buckets of related rows; aggregation turns each bucket into a useful summary.",
+      "evidence": ["groups by a meaningful category", "chooses and explains a summary measure"],
+      "common_mistakes": ["averages identifiers", "uses a mean when outliers make it misleading", "loses grouping keys"],
+      "understanding_checks": ["What does one output row represent now?", "Why is this summary appropriate?"],
+      "projects": ["summarize synthetic ticket volume by category"]
+    },
+    {
+      "id": "combine-data",
+      "title": "Combine datasets",
+      "prerequisites": ["group-and-summarize"],
+      "concepts": ["dataframes"],
+      "mental_model": "A join connects rows using a shared key; the join type decides which unmatched rows survive.",
+      "evidence": ["identifies a valid join key", "checks row counts before and after joining"],
+      "common_mistakes": ["joins on a non-unique key", "creates duplicate rows", "silently loses unmatched records"],
+      "understanding_checks": ["Which rows can fail to match?", "Why did the row count change?"],
+      "projects": ["combine synthetic tickets with a category reference table"]
+    },
+    {
+      "id": "visualize-and-communicate",
+      "title": "Visualize and communicate",
+      "prerequisites": ["group-and-summarize"],
+      "concepts": ["visualization", "aggregation"],
+      "mental_model": "A chart is an argument made with data; its form should make the intended comparison easy and honest.",
+      "evidence": ["chooses a chart for a stated question", "labels it clearly", "explains one limitation"],
+      "common_mistakes": ["uses a misleading axis", "adds decoration that hides the comparison", "claims causation from correlation"],
+      "understanding_checks": ["What question does this chart answer?", "What could a reader misunderstand?"],
+      "projects": ["create a short synthetic-data insight report"]
+    }
+  ]
+}

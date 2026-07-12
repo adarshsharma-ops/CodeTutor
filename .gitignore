@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.env
+.venv/
+
+# Learner model / local DBs (learner data stays on-machine)
+*.db
+*.db-journal
+
+# Test / tooling caches
+.pytest_cache/
+.DS_Store
+
+# Node / VS Code extension
+node_modules/
+out/
+*.vsix

@@ -1,0 +1,82 @@
+{
+  "id": "ml-foundations",
+  "version": "1.0.0",
+  "title": "Machine Learning Foundations",
+  "audience": "Python-for-data learners beginning applied ML",
+  "promise": "Build simple models while understanding what they learn, how they fail, and whether they add value.",
+  "pathway_prerequisites": ["python-for-data:visualize-and-communicate"],
+  "modules": [
+    {
+      "id": "frame-the-problem", "title": "Frame the prediction problem", "prerequisites": [],
+      "concepts": ["dataframes"],
+      "mental_model": "Machine learning learns a repeatable relationship from examples; first define the decision, prediction, and consequence.",
+      "evidence": ["states the prediction target", "identifies who uses it", "describes a costly error"],
+      "common_mistakes": ["starts with an algorithm instead of a problem", "uses a target unavailable at prediction time"],
+      "understanding_checks": ["What exactly will be predicted?", "What happens when the prediction is wrong?"],
+      "projects": ["frame a synthetic support-ticket priority predictor"]
+    },
+    {
+      "id": "features-labels-baseline", "title": "Features, labels, and baselines", "prerequisites": ["frame-the-problem"],
+      "concepts": ["dataframes", "aggregation"],
+      "mental_model": "Features are clues available to the model; the label is the answer it learns to predict; a baseline is the simplest honest comparison.",
+      "evidence": ["separates features from label", "creates a simple baseline", "compares model value with the baseline"],
+      "common_mistakes": ["includes the answer among the clues", "assumes any trained model is useful"],
+      "understanding_checks": ["Would this feature exist when making a real prediction?", "What would a no-model baseline do?"],
+      "projects": ["majority-class ticket baseline"]
+    },
+    {
+      "id": "split-without-leakage", "title": "Separate learning from evaluation", "prerequisites": ["features-labels-baseline"],
+      "concepts": ["ml_splitting"],
+      "mental_model": "A test set is hidden homework: the model must not see it while learning or while you make training decisions.",
+      "evidence": ["creates train and test sets", "explains why the test set stays untouched"],
+      "common_mistakes": ["evaluates on training data", "uses test results repeatedly to tune the model", "splits time-dependent data randomly"],
+      "understanding_checks": ["Which data is the model allowed to learn from?", "When may the test set be used?"],
+      "projects": ["create a leakage-safe synthetic split"]
+    },
+    {
+      "id": "preprocess-safely", "title": "Preprocess without leakage", "prerequisites": ["split-without-leakage"],
+      "concepts": ["ml_preprocessing"],
+      "mental_model": "Preprocessing learns rules from training data and then applies those same rules to unseen data.",
+      "evidence": ["fits preprocessing on training data only", "uses a repeatable pipeline"],
+      "common_mistakes": ["scales before splitting", "fits an encoder on the test set", "drops rows differently at prediction time"],
+      "understanding_checks": ["Which step is learning from data?", "What information could leak from the test set?"],
+      "projects": ["build a numeric-and-category preprocessing pipeline"]
+    },
+    {
+      "id": "train-and-predict", "title": "Train and predict", "prerequisites": ["preprocess-safely"],
+      "concepts": ["ml_training", "ml_prediction"],
+      "mental_model": "Training adjusts a model using examples; prediction applies the learned relationship to new feature values.",
+      "evidence": ["fits a simple model", "predicts on unseen features", "keeps prediction separate from training"],
+      "common_mistakes": ["passes labels into prediction", "uses a complex model before a simple one"],
+      "understanding_checks": ["What changed during fit?", "What information enters predict?"],
+      "projects": ["train a simple synthetic ticket classifier"]
+    },
+    {
+      "id": "metrics-and-errors", "title": "Measure the errors that matter", "prerequisites": ["train-and-predict"],
+      "concepts": ["ml_evaluation"],
+      "mental_model": "A metric turns prediction errors into a score; the right metric reflects the real cost of different mistakes.",
+      "evidence": ["chooses a metric from consequences", "compares against baseline", "examines error types"],
+      "common_mistakes": ["uses accuracy for an imbalanced problem", "reports one score without context"],
+      "understanding_checks": ["Which error is more costly?", "Can this score hide a weak minority class?"],
+      "projects": ["compare precision and recall for synthetic spam filtering"]
+    },
+    {
+      "id": "generalization", "title": "Overfitting and cross-validation", "prerequisites": ["metrics-and-errors"],
+      "concepts": ["ml_cross_validation", "ml_evaluation"],
+      "mental_model": "A useful model learns a pattern that survives new examples, not the accidental details of its training set.",
+      "evidence": ["compares train and validation performance", "uses cross-validation", "explains score variation"],
+      "common_mistakes": ["chooses the model with the best training score", "treats one split as universal truth"],
+      "understanding_checks": ["What evidence suggests overfitting?", "Why do fold scores differ?"],
+      "projects": ["compare model complexity using cross-validation"]
+    },
+    {
+      "id": "interpret-and-limit", "title": "Interpret and document limitations", "prerequisites": ["generalization"],
+      "concepts": ["ml_interpretation", "ml_evaluation"],
+      "mental_model": "Interpretation describes model behavior and evidence; it does not prove causation or guarantee fairness.",
+      "evidence": ["examines influential features", "documents intended use", "states limitations and monitoring needs"],
+      "common_mistakes": ["treats importance as causation", "generalizes beyond evaluation data", "hides weak subgroups"],
+      "understanding_checks": ["What does this interpretation not prove?", "Where should this model not be used?"],
+      "projects": ["write a model card for the synthetic classifier"]
+    }
+  ]
+}
