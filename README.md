@@ -82,8 +82,23 @@ what yes-or-no question the learner wants Python to answer.
 
 ## Demo
 
-<!-- Drop a screenshot or GIF of the chat panel here once captured, e.g.:
-     ![CodeTutor in action](docs/demo.gif) -->
+▶️ **[Watch the 45-second sanitized demo](docs/CodeTutor-demo-sanitized.mp4)**
+
+### Guidance that explains, not just corrects
+
+When a learner pauses midway through a condition, CodeTutor identifies the precise
+line, explains why Python needs a complete yes-or-no question, and gives a useful next
+step without writing the answer for them.
+
+![CodeTutor explains an incomplete condition beside the learner's code](docs/screenshots/adaptive-guidance.jpg)
+
+### Coaching that follows the learner's progress
+
+As the learner continues, the mentor recognizes what changed, asks a focused question
+about intent, and explains structural mistakes in plain language. The learner stays at
+the keyboard and makes each decision.
+
+![CodeTutor provides contextual coaching while a learner builds a number-guessing game](docs/screenshots/in-context-coaching.jpg)
 
 A real session building a weather app (goal → you type → it teaches):
 
