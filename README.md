@@ -82,7 +82,7 @@ what yes-or-no question the learner wants Python to answer.
 
 ## Demo
 
-▶️ **[Watch the 45-second sanitized demo](docs/CodeTutor-demo-sanitized.mp4)**
+▶️ **[Watch the 45-second demo](docs/CodeTutor-demo.mp4)**
 
 ### Guidance that explains, not just corrects
 
