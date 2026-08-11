@@ -223,7 +223,7 @@ CodeTutor: Start a new learning journey
 Then:
 
 1. Choose **Beginner**, **Intermediate**, or **Advanced** teaching depth.
-2. Choose **General Python** or **AI Engineer & AI Expert**.
+2. Choose **General Python** or the **Structured AI Engineering Learning Path**.
 3. Choose a project.
 4. Select **Start in a new Python lesson file** when prompted.
 5. Save the new file when convenient and begin typing. Do not wait for CodeTutor to write

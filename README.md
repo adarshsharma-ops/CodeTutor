@@ -82,10 +82,10 @@ what yes-or-no question the learner wants Python to answer.
 
 ## Demo
 
-▶️ **[Watch the 79-second AI learning journey](docs/CodeTutor-AI-Learning-Journey.mp4)**
+▶️ **[Watch the 60-second AI learning journey](docs/CodeTutor-AI-Learning-Journey.mp4)**
 
 The latest walkthrough follows the complete loop: choose a model provider and teaching
-level, enter the AI Engineer & AI Expert journey, receive a beginner-friendly blueprint,
+level, enter the Structured AI Engineering Learning Path, receive a beginner-friendly blueprint,
 get guidance at the line where progress stalls, correct a logic mistake, verify the
 working program, and continue directly into the next AI lesson. Current guidance remains
 prominent while earlier explanations stay available in a separate history drawer.
@@ -172,7 +172,7 @@ typo gets flagged, and the profile persists across runs.
 ### The learning path (don't know what to build?)
 
 When you start a session, CodeTutor first separates **teaching depth** from **learning
-journey**. Learners can choose General Python or the AI Engineer & AI Expert journey,
+journey**. Learners can choose General Python or the Structured AI Engineering Learning Path,
 then receive project goals **tailored to that choice and entry level**. A beginner who
 chooses AI starts with the Python foundations AI systems depend on; intermediate and
 advanced learners can enter through later stages without hiding the complete journey.
@@ -474,8 +474,8 @@ conservative runtime case where a function reads a local name before its later a
 
 ## Open-source learning vision
 
-The current release offers a Python foundation journey and an opt-in AI Engineer & AI
-Expert journey. The AI journey is a structured curriculum and routing capability—not a
+The current release offers a Python foundation journey and an opt-in Structured AI
+Engineering Learning Path. The AI journey is a structured curriculum and routing capability—not a
 claim that completing projects alone proves professional expertise. The near-term north
 star remains an excellent Python mentor
 that helps a learner build understanding and independence instead of generating finished
@@ -549,7 +549,7 @@ does not establish that the experimental design is valid. The pathway therefore 
 plain-language reasoning about availability at prediction time, test-set isolation,
 baseline value, error costs, generalization, and unsupported uses.
 
-### AI Engineer & AI Expert pathway
+### Structured AI Engineering Learning Path
 
 `mentor-service/curricula/ai-engineer/v1/manifest.json` is an opt-in end-to-end journey:
 

@@ -22,7 +22,7 @@ public releases begin.
 
 - Added separate Beginner, Intermediate, and Advanced teaching modes that can be changed
   during a session.
-- Added an opt-in AI Engineer & AI Expert journey spanning Python foundations, data and
+- Added an opt-in Structured AI Engineering Learning Path spanning Python foundations, data and
   model thinking, dependable LLM applications, retrieval, agents, evaluations and
   governance, and production operations.
 - Added versioned Python Foundations, Python for Data, and Machine Learning Foundations

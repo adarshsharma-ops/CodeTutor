@@ -731,7 +731,7 @@ async function pickLearningPath(level: LearnerLevel): Promise<LearningPath | und
       ? "Enter through data and model thinking, then progress into production AI engineering"
       : "Enter through LLM application engineering, architecture, evaluation, safety, governance, and production operations";
   const choice = await vscode.window.showQuickPick([
-    { label: "AI Engineer & AI Expert", description: aiDescription, id: "ai-engineer" as LearningPath },
+    { label: "Structured AI Engineering Learning Path", description: aiDescription, id: "ai-engineer" as LearningPath },
     { label: "General Python", description: "Build broad Python capability through progressively more substantial projects", id: "python-foundations" as LearningPath },
   ], {
     title: "Which learning journey do you want CodeTutor to guide?",

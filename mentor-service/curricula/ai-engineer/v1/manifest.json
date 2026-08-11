@@ -1,7 +1,7 @@
 {
   "id": "ai-engineer",
   "version": "1.0.0",
-  "title": "AI Engineer & AI Expert",
+  "title": "Structured AI Engineering Learning Path",
   "audience": "Learners who want to build, evaluate, govern, and ship reliable AI systems",
   "promise": "Progress from the Python foundations AI work depends on to production-quality AI applications you can explain and defend.",
   "entry_modules": {
