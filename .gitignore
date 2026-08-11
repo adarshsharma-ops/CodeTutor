@@ -16,3 +16,4 @@ __pycache__/
 node_modules/
 out/
 *.vsix
+**/.vscode/settings.json

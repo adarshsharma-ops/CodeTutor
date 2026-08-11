@@ -162,13 +162,31 @@ typo gets flagged, and the profile persists across runs.
 
 ### The learning path (don't know what to build?)
 
-When you start a session and aren't sure what to build, the mentor suggests project goals
-**tailored to your mastery**. A structured curriculum (Foundations → Functions → Working
-with the outside world → Program design → Real-world Python) maps each level to concepts;
+When you start a session, CodeTutor first separates **teaching depth** from **learning
+journey**. Learners can choose General Python or the AI Engineer & AI Expert journey,
+then receive project goals **tailored to that choice and entry level**. A beginner who
+chooses AI starts with the Python foundations AI systems depend on; intermediate and
+advanced learners can enter through later stages without hiding the complete journey.
+A structured general curriculum (Foundations → Functions → Working with the outside
+world → Program design → Real-world Python) maps each level to concepts;
 the mentor finds your current level from the learner model and proposes projects that
 exercise the concepts you *haven't* mastered yet. As you master them, the suggestions move
 you up the path — a step-by-step route toward expert. The side panel shows your progress
 per level. All deterministic, so it works offline (`GET /suggest-goal?learner_id=...`).
+
+### Resume, verify, and move forward
+
+CodeTutor stores the active lesson locally alongside the learner model: goal, teaching
+level, blueprint, current and completed steps, check evidence, file association, and last
+activity time. Restarting VS Code or the mentor service offers **Continue lesson** instead
+of silently resetting the learner to step one. The saved code value is a short fingerprint
+rather than a second copy of the source; the current file is evaluated again on return.
+
+Guided projects expose **Run lesson check** in the mentor panel and Command Palette.
+Completion is deterministic: project-specific checks must pass, the Python must parse,
+and the learner must confirm that they exercised the program successfully. The LLM does
+not award completion. A passing lesson presents **Next lesson** and **Review what I
+learned**, while retaining the learner's broader progress.
 
 ## Architecture
 
@@ -249,8 +267,8 @@ The deterministic layer is covered by a hermetic pytest suite (no network, no LL
 ```bash
 cd mentor-service
 pip install pytest
-pytest                 # 81 tests: concept detection, line-completeness, syntax,
-                       # learner-model mastery, misconception recurrence, persistence
+pytest                 # 150 tests: lesson resume/checks, semantic validation,
+                       # quiet interventions, safe fixes, learner-model persistence
 ```
 
 The current tests validate deterministic mechanics, not learning effectiveness. A useful
@@ -258,6 +276,15 @@ product evaluation must additionally measure hint relevance, interruption rate, 
 retention, task completion without generated code, and behavior across skill levels.
 
 ## Quick start
+
+At the start of each session, choose how CodeTutor should teach:
+
+- **Beginner** leads with the concrete next action, its purpose, and plain-language help.
+- **Intermediate** recommends an approach while exposing useful implementation choices.
+- **Advanced** emphasizes deeper principles, trade-offs, architecture, testing, and design.
+
+The level is a session preference, not a permanent label, and can be changed from the
+Command Palette with **CodeTutor: Change teaching level**.
 
 ### 1. Feel the brain (zero setup, no LLM needed)
 
@@ -277,9 +304,19 @@ python3 eval_harness.py --out report.md          # offline baseline
 python3 eval_harness.py --out report_llm.md      # real explanations to read critically
 ```
 
+Prefer not to use a cloud key? CodeTutor also supports **keyless local models through
+Ollama as an experimental option**. Local privacy and zero API cost do not guarantee good
+tutoring: smaller models may misunderstand intent or give weaker explanations. The
+first-run chooser makes that trade-off visible. See the
+[provider setup guide](docs/PROVIDER_SETUP.md) for local Ollama, OpenAI, and Anthropic
+instructions. Cloud keys stay in the ignored local `mentor-service/.env` file; never put
+them in VS Code settings, source code, issues, or chat.
+
 The harness runs every behavior — blueprint, next-step, error, stuck, **explain**
 (curiosity payoff), and **why-is-this-here** — across scenarios and writes a Markdown
 report. This is how you answer "is the mentoring actually good?" and tune `prompts.py`.
+The [tutor reliability guide](docs/TUTOR_RELIABILITY.md) explains the deterministic
+checks, progressive-hint policy, stale-response protection, and limits of this gate.
 
 ### 2. Run the service
 
@@ -389,10 +426,10 @@ conservative runtime case where a function reads a local name before its later a
 
 ## Open-source learning vision
 
-The current release focuses on Python foundations. The tutoring engine is intended to
-support optional, modular learning paths over time: Python for data, ML/AI, API
-development, application delivery, and cloud deployment. Those pathways are a product
-vision, not current functionality. The near-term north star is an excellent Python mentor
+The current release offers a Python foundation journey and an opt-in AI Engineer & AI
+Expert journey. The AI journey is a structured curriculum and routing capability—not a
+claim that completing projects alone proves professional expertise. The near-term north
+star remains an excellent Python mentor
 that helps a learner build understanding and independence instead of generating finished
 solutions.
 
@@ -420,7 +457,8 @@ Every module declares prerequisites, analyzer concepts, a plain-language mental 
 observable evidence, common mistakes, understanding questions, and projects. The service
 validates the catalog at startup and exposes `GET /curriculum` and
 `GET /curriculum/modules/{module_id}`. This is curriculum infrastructure plus a structured
-foundation pathway; it is not yet a full lesson-delivery or formal assessment system.
+foundation pathway and local lesson check/resume loop; it is not a formal assessment
+system or an educational-outcomes claim.
 
 ### Python for Data pathway
 
@@ -462,6 +500,25 @@ The analyzer recognizes initial scikit-learn evidence such as `train_test_split`
 does not establish that the experimental design is valid. The pathway therefore requires
 plain-language reasoning about availability at prediction time, test-set isolation,
 baseline value, error costs, generalization, and unsupported uses.
+
+### AI Engineer & AI Expert pathway
+
+`mentor-service/curricula/ai-engineer/v1/manifest.json` is an opt-in end-to-end journey:
+
+1. Python foundations for AI
+2. Data and model thinking
+3. Dependable LLM applications
+4. Retrieval-augmented generation
+5. Agents, tools, and controlled workflows
+6. Evaluations, safety, and governance
+7. Deployment, observability, and production operations
+
+Beginner mode enters at Python for AI and explains why each foundational construct will
+matter later. Intermediate mode enters at data and model thinking. Advanced mode enters
+at LLM application engineering while leaving earlier modules visible for reference. Each
+stage includes mental models, observable evidence, common failure patterns, understanding
+checks, and sanitized projects. Advanced AI completion still requires stronger
+project-specific evaluators before CodeTutor can make any assessment claim.
 
 ## What this project demonstrates
 

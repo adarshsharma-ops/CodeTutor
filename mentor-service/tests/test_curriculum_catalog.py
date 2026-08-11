@@ -56,3 +56,15 @@ def test_discovers_ml_foundations_pathway():
     catalog = catalog_by_id("ml-foundations")
     assert catalog.next_module(set())["id"] == "frame-the-problem"
     assert catalog.module("split-without-leakage")["understanding_checks"]
+
+
+def test_discovers_ai_engineer_pathway_with_level_entry_points():
+    catalog = catalog_by_id("ai-engineer")
+    assert catalog.raw["entry_modules"] == {
+        "beginner": "python-for-ai",
+        "intermediate": "data-and-model-thinking",
+        "advanced": "llm-application-engineering",
+    }
+    assert len(catalog.modules) == 7
+    assert catalog.module("evals-safety-governance")["projects"]
+    assert catalog.module("production-ai")["concepts"]

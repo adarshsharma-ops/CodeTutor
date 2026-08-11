@@ -1,0 +1,77 @@
+{
+  "id": "ai-engineer",
+  "version": "1.0.0",
+  "title": "AI Engineer & AI Expert",
+  "audience": "Learners who want to build, evaluate, govern, and ship reliable AI systems",
+  "promise": "Progress from the Python foundations AI work depends on to production-quality AI applications you can explain and defend.",
+  "entry_modules": {
+    "beginner": "python-for-ai",
+    "intermediate": "data-and-model-thinking",
+    "advanced": "llm-application-engineering"
+  },
+  "modules": [
+    {
+      "id": "python-for-ai", "title": "Python foundations for AI", "prerequisites": [],
+      "concepts": ["variables", "conditionals", "loops", "lists", "dicts", "functions", "exceptions", "json", "http"],
+      "mental_model": "AI applications are still software: Python values, decisions, functions, data boundaries, and failure handling make model behavior usable and safe.",
+      "evidence": ["writes and calls small functions", "handles structured input", "validates failure", "calls an HTTP API without hard-coded secrets"],
+      "common_mistakes": ["rushes to an AI library before understanding Python data", "hard-codes credentials", "assumes external calls always succeed"],
+      "understanding_checks": ["What information enters this function?", "What can fail outside the program?", "Why must the key stay outside the source file?"],
+      "projects": ["a rule-based support-ticket classifier in plain Python", "a JSON-backed prompt experiment tracker", "a resilient Python API client using synthetic data"]
+    },
+    {
+      "id": "data-and-model-thinking", "title": "Data and model thinking", "prerequisites": ["python-for-ai"],
+      "concepts": ["dataframes", "data_loading", "data_cleaning", "aggregation", "visualization", "ml_splitting", "ml_evaluation"],
+      "mental_model": "A useful AI system begins with a clearly framed decision and trustworthy evidence, not with a fashionable model.",
+      "evidence": ["profiles synthetic data", "defines a target and baseline", "separates learning data from evaluation data", "connects a metric to consequences"],
+      "common_mistakes": ["starts with an algorithm", "leaks the answer into features", "uses accuracy without examining error costs"],
+      "understanding_checks": ["What decision will this output support?", "What would a no-model baseline do?", "Which error is more costly?"],
+      "projects": ["profile a synthetic support-ticket dataset", "frame and baseline a synthetic priority predictor", "compare model errors against a business-aware metric"]
+    },
+    {
+      "id": "llm-application-engineering", "title": "Build dependable LLM applications", "prerequisites": ["data-and-model-thinking"],
+      "concepts": ["llm_api", "prompt_design", "structured_output", "json", "exceptions", "async"],
+      "mental_model": "An LLM is a probabilistic component behind an interface; dependable applications constrain inputs, validate outputs, and handle failure explicitly.",
+      "evidence": ["calls an LLM through a provider boundary", "keeps credentials outside code", "validates structured output", "handles timeout and malformed responses"],
+      "common_mistakes": ["treats prompts as the whole product", "trusts free-form output", "couples application logic to one provider"],
+      "understanding_checks": ["What contract surrounds the model?", "What happens when output is invalid?", "Which logic should remain deterministic?"],
+      "projects": ["a provider-neutral text classification client", "a structured-output meeting-action extractor", "an LLM application with timeout retry and fallback"]
+    },
+    {
+      "id": "grounded-ai", "title": "Ground AI with retrieval", "prerequisites": ["llm-application-engineering"],
+      "concepts": ["embeddings", "vector_search", "rag", "data_loading", "ai_evaluation"],
+      "mental_model": "Retrieval does not give a model knowledge; it selects evidence that the model must use, cite, and remain bounded by.",
+      "evidence": ["chunks documents intentionally", "retrieves relevant evidence", "requires grounded answers", "evaluates retrieval separately from generation"],
+      "common_mistakes": ["uses arbitrary chunk sizes", "evaluates only fluent answers", "allows answers unsupported by retrieved text"],
+      "understanding_checks": ["Was the needed evidence retrieved?", "Does the answer follow from that evidence?", "When should the system abstain?"],
+      "projects": ["a local RAG assistant over sanitized documents", "a retrieval-quality evaluation set", "a grounded assistant that cites evidence and abstains"]
+    },
+    {
+      "id": "agents-and-tools", "title": "Agents, tools, and workflow design", "prerequisites": ["grounded-ai"],
+      "concepts": ["tool_calling", "agents", "structured_output", "async", "ai_safety"],
+      "mental_model": "An agent is a controlled decision loop around models and tools; every capability needs a boundary, observable state, and stopping rule.",
+      "evidence": ["defines narrow tools", "validates tool arguments", "limits iterations", "separates approval-requiring actions"],
+      "common_mistakes": ["uses an agent where a workflow is enough", "gives tools excessive authority", "has no stop or recovery condition"],
+      "understanding_checks": ["Why is an agent needed here?", "What is the maximum authority of this tool?", "How does the loop stop safely?"],
+      "projects": ["a deterministic workflow with one LLM decision", "a tool-calling research assistant over synthetic data", "an approval-gated multi-step agent"]
+    },
+    {
+      "id": "evals-safety-governance", "title": "Evals, safety, and governance", "prerequisites": ["agents-and-tools"],
+      "concepts": ["ai_evaluation", "ai_safety", "ai_governance", "ml_evaluation"],
+      "mental_model": "AI quality is an evidence and risk-management discipline: define desired behavior, unacceptable failure, accountable ownership, and release gates.",
+      "evidence": ["builds representative eval cases", "measures failure categories", "documents data and tool risks", "defines human escalation and release criteria"],
+      "common_mistakes": ["tests only happy paths", "uses one aggregate score", "treats policy language as a technical control"],
+      "understanding_checks": ["Which failure would block release?", "Who owns this risk?", "Which control is preventative, detective, or corrective?"],
+      "projects": ["an eval harness for a support assistant", "a prompt-injection and unsafe-tool test suite", "an AI system card with risk controls and release gates"]
+    },
+    {
+      "id": "production-ai", "title": "Ship and operate AI systems", "prerequisites": ["evals-safety-governance"],
+      "concepts": ["deployment", "observability", "ai_evaluation", "ai_governance", "async"],
+      "mental_model": "Shipping is the beginning of the evidence cycle: production AI needs versioning, monitoring, cost and latency controls, rollback, and accountable change management.",
+      "evidence": ["packages a service", "records model and prompt versions", "monitors quality latency and cost", "defines rollback and incident response"],
+      "common_mistakes": ["monitors uptime but not answer quality", "changes prompts without versioning", "has no rollback threshold"],
+      "understanding_checks": ["How will you detect quality drift?", "Which version produced this response?", "What triggers rollback?"],
+      "projects": ["a deployable AI API with configuration and health checks", "an observability dashboard over synthetic traces", "a production-readiness review and rollback plan"]
+    }
+  ]
+}

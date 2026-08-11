@@ -7,8 +7,12 @@
 //   * surface the reply — inline decoration + non-blocking side panel
 //
 import * as vscode from "vscode";
-import { MentorClient, MentorMessage, GoalSuggestion } from "./client";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
+import { MentorClient, MentorMessage, GoalSuggestion, SessionResponse, ResumeResponse, LessonCheckResponse } from "./client";
 import { MentorPanel } from "./panel";
+import { ProviderEnv, updateEnvFile, validApiKey } from "./providerConfig";
 
 let client: MentorClient;
 let sessionId: string | undefined;
@@ -17,8 +21,8 @@ let extContext: vscode.ExtensionContext;
 
 let debounceTimer: NodeJS.Timeout | undefined;
 let idleTimer: NodeJS.Timeout | undefined;
-let lastStuckSignature = ""; // avoid re-firing the same stuck nudge
 let starting = false;        // guard against overlapping goal prompts
+let queuedManualStart = false; // never silently discard an explicit Start command
 let autoPrompted = false;    // only auto-prompt for a goal once per activation
 let lastPyDoc: vscode.TextDocument | undefined; // the Python file being mentored
 let lastHintedCode = "";     // dedup: skip a hint if the buffer is unchanged
@@ -26,6 +30,18 @@ let lastHintAt = 0;          // throttle: min gap between auto hints
 let paused = false;          // when true, nothing is sent to the service
 let statusItem: vscode.StatusBarItem | undefined; // shows provider + pause state
 let automaticRequestInFlight = false; // never stack completed/stuck interventions
+let explicitRequestInFlight = false; // learner questions always take priority over automation
+let lastSurfacedFingerprint = ""; // prevent duplicate advice from reaching both UI surfaces
+let lastAutomaticGuidanceAt = 0; // current guidance receives a real reading/application window
+let providerLabel = "";
+type LearnerLevel = "beginner" | "intermediate" | "advanced";
+let learnerLevel: LearnerLevel = "beginner";
+type LearningPath = "python-foundations" | "ai-engineer";
+let learningPath: LearningPath = "python-foundations";
+let selectedModuleId = "";
+let nextLesson: LessonCheckResponse["next"] | undefined;
+let lastReadyCode = "";
+let readinessPrompted = false;
 
 // --- Privacy controls: never-send patterns + optional function-only scope ---
 
@@ -91,6 +107,9 @@ function scopeCode(document: vscode.TextDocument, position?: vscode.Position): S
     const indent = line.length - line.trimStart().length;
     if (indent <= defIndent) { end = i; break; }
   }
+  // Scanning upward can find the previous function even when the cursor has already
+  // moved back to top-level code. In that case the cursor is not enclosed by it.
+  if (cur >= end) return { text: fullText, startLine: 0 };
   return { text: lines.slice(start, end).join("\n"), startLine: start };
 }
 
@@ -144,18 +163,27 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codetutor.start", () => startSession(context, true)),
+    vscode.commands.registerCommand("codetutor.start", () => requestManualStart(context)),
     vscode.commands.registerCommand("codetutor.explainLine", explainLine),
     vscode.commands.registerCommand("codetutor.askLine", askLine),
+    vscode.commands.registerCommand("codetutor.fixLine", fixLine),
     vscode.commands.registerCommand("codetutor.changeModel", changeModel),
+    vscode.commands.registerCommand("codetutor.changeLevel", changeLevel),
+    vscode.commands.registerCommand("codetutor.setupProvider", () => setupProvider(true)),
+    vscode.commands.registerCommand("codetutor.resetProviderOnboarding", resetProviderOnboarding),
     vscode.commands.registerCommand("codetutor.showProgress", showProgress),
+    vscode.commands.registerCommand("codetutor.checkLesson", checkCurrentLesson),
+    vscode.commands.registerCommand("codetutor.nextLesson", startNextLesson),
     vscode.commands.registerCommand("codetutor.showChat", () => {
-      if (panel) MentorPanel.show(context, handleAsk);
+      if (panel) MentorPanel.show(context, handleAsk, handlePanelAction);
     }),
     vscode.commands.registerCommand("codetutor.togglePause", togglePause),
     vscode.workspace.onDidChangeTextDocument(onEdit),
     vscode.window.onDidChangeActiveTextEditor((ed) => {
-      if (ed?.document.languageId === "python") maybeAutoStart();
+      if (ed?.document.languageId === "python") {
+        lastPyDoc = ed.document;
+        maybeAutoStart();
+      }
     }),
     vscode.languages.registerHoverProvider("python", { provideHover }),
     vscode.languages.registerCodeActionsProvider("python", new TutorCodeActions(), {
@@ -171,19 +199,32 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(statusItem);
   updateStatus();
   statusItem.show();
+  refreshProviderStatus();
 
-  // Auto-start: if a Python file is already open, offer to begin right away.
-  if (vscode.window.activeTextEditor?.document.languageId === "python") {
-    maybeAutoStart();
-  }
+  // First-run provider onboarding is an extension-level concern, not an editor
+  // timing event. Run it after activation even if VS Code has not yet reported
+  // the already-open Python editor. Lesson setup itself still waits for Python.
+  void initializeOnLaunch(context);
 }
 
 function updateStatus() {
   if (!statusItem) return;
-  statusItem.text = paused ? "$(debug-pause) CodeTutor: paused" : "$(mortar-board) CodeTutor";
+  statusItem.text = paused ? "$(debug-pause) CodeTutor: paused"
+    : `$(mortar-board) CodeTutor${providerLabel ? `: ${providerLabel}` : ""}`;
   statusItem.tooltip = paused
     ? "CodeTutor is paused — no code is sent. Click to resume."
     : "CodeTutor is active. Completed-line/idle/ask events send your Python buffer to the mentor service (and its configured provider). Click to pause.";
+}
+
+async function refreshProviderStatus() {
+  try {
+    const health = await client.health();
+    providerLabel = health.local_model ? "local · experimental" : health.llm_mode;
+    updateStatus();
+  } catch {
+    providerLabel = "service unavailable";
+    updateStatus();
+  }
 }
 
 function togglePause() {
@@ -195,12 +236,116 @@ function togglePause() {
   );
 }
 
+async function resetProviderOnboarding() {
+  const choice = await vscode.window.showWarningMessage(
+    "Reset CodeTutor for a clean first-run demo? This clears saved OpenAI/Claude keys, model selection, and the locally saved lesson so an older blueprint cannot reappear. Unrelated settings and source files are kept.",
+    { modal: true }, "Reset provider setup"
+  );
+  if (choice !== "Reset provider setup") return;
+  await updateEnvFile(mentorEnvPath(), {
+    MENTOR_LLM_MODE: "",
+    ANTHROPIC_API_KEY: "",
+    OPENAI_API_KEY: "",
+    ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+    OPENAI_BASE_URL: "https://api.openai.com/v1",
+    MENTOR_MODEL: "",
+    MENTOR_MODEL_FAST: "",
+    MENTOR_FALLBACK_MODEL: "",
+    MENTOR_FALLBACK_FAST: "",
+  });
+  await extContext.globalState.update("codetutor.providerOnboardingComplete", false);
+  // The service is commonly stopped during a clean-demo reset. Remember that
+  // its local learner record still needs clearing and finish that work after
+  // the next successful provider reload.
+  await extContext.globalState.update("codetutor.pendingLearnerReset", true);
+  sessionId = undefined;
+  nextLesson = undefined;
+  autoPrompted = false;
+  try {
+    await client.resetProfile("local");
+    await extContext.globalState.update("codetutor.pendingLearnerReset", false);
+  } catch { /* service may not be running; activateSavedProvider retries */ }
+  try { await client.reloadProvider(); } catch { /* it will load the reset file when started */ }
+  await refreshProviderStatus();
+  vscode.window.showInformationMessage(
+    "Provider setup reset. Reload this Extension Development Host, then open a Python file to record the complete first-run model setup."
+  );
+}
+
+async function activateSavedProvider(label: string): Promise<boolean> {
+  await extContext.globalState.update("codetutor.providerOnboardingComplete", true);
+  try {
+    const health = await client.reloadProvider();
+    if (extContext.globalState.get<boolean>("codetutor.pendingLearnerReset", false)) {
+      await client.resetProfile("local");
+      await extContext.globalState.update("codetutor.pendingLearnerReset", false);
+      sessionId = undefined;
+      nextLesson = undefined;
+    }
+    providerLabel = health.local_model ? "local · experimental" : health.llm_mode;
+    updateStatus();
+    vscode.window.showInformationMessage(`${label} is ready. CodeTutor updated the running mentor service automatically.`);
+    return true;
+  } catch {
+    providerLabel = `${label} · service start needed`;
+    updateStatus();
+    const action = await vscode.window.showWarningMessage(
+      `${label} was saved, but the local mentor service is not running. Start it, then start CodeTutor again.`,
+      "Show startup command"
+    );
+    if (action === "Show startup command") {
+      const terminal = vscode.window.createTerminal({
+        name: "CodeTutor mentor service",
+        cwd: path.resolve(extContext.extensionPath, "..", "mentor-service"),
+      });
+      terminal.show();
+      terminal.sendText("source .venv/bin/activate && python -m uvicorn mentor.server:app --host 127.0.0.1 --port 8756");
+    }
+    return false;
+  }
+}
+
 // Kick off a session automatically the first time the learner touches Python,
 // so they never have to hunt for a command. Prompts for the goal once.
 function maybeAutoStart() {
   if (sessionId || starting || autoPrompted) return;
   autoPrompted = true;
   startSession(extContext, false);
+}
+
+async function initializeOnLaunch(context: vscode.ExtensionContext): Promise<void> {
+  if (starting) return;
+  starting = true;
+  try {
+    if (!(await ensureConsent())) return;
+    const onboardingDone = extContext.globalState.get<boolean>(
+      "codetutor.providerOnboardingComplete", false
+    );
+    if (!onboardingDone && !(await setupProvider(false))) return;
+  } catch (err) {
+    console.error("CodeTutor launch setup failed:", err);
+    vscode.window.showErrorMessage(friendlyError(err));
+    return;
+  } finally {
+    starting = false;
+  }
+
+  const active = vscode.window.activeTextEditor?.document;
+  if (active?.languageId === "python") {
+    lastPyDoc = active;
+    maybeAutoStart();
+  }
+}
+
+async function requestManualStart(context: vscode.ExtensionContext): Promise<void> {
+  if (starting) {
+    queuedManualStart = true;
+    vscode.window.showInformationMessage(
+      "CodeTutor will open a new learning journey as soon as the current startup prompt closes."
+    );
+    return;
+  }
+  await startSession(context, true, true);
 }
 
 export function deactivate() {
@@ -228,7 +373,119 @@ async function ensureConsent(): Promise<boolean> {
   return false;
 }
 
-async function startSession(context: vscode.ExtensionContext, manual: boolean) {
+function mentorEnvPath(): string {
+  return path.resolve(extContext.extensionPath, "..", "mentor-service", ".env");
+}
+
+async function openLocalSetupGuide(): Promise<void> {
+  const uri = vscode.Uri.file(path.resolve(extContext.extensionPath, "docs", "LOCAL_MODEL_SETUP.md"));
+  try {
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document, { preview: false });
+  } catch {
+    await vscode.env.openExternal(vscode.Uri.parse(
+      "https://github.com/adarshsharma-ops/CodeTutor/blob/main/docs/PROVIDER_SETUP.md"
+    ));
+  }
+}
+
+async function ollamaInstalled(): Promise<boolean> {
+  const candidates = [
+    "/Applications/Ollama.app", path.join(os.homedir(), "Applications", "Ollama.app"),
+    "/opt/homebrew/bin/ollama", "/usr/local/bin/ollama",
+  ];
+  for (const candidate of candidates) {
+    try { await fs.access(candidate); return true; } catch { /* try the next known location */ }
+  }
+  return false;
+}
+
+async function ollamaModels(): Promise<string[] | null> {
+  try {
+    const response = await fetch("http://127.0.0.1:11434/api/tags", { signal: AbortSignal.timeout(2500) });
+    if (!response.ok) return null;
+    const payload = await response.json() as { models?: Array<{ name?: string }> };
+    return (payload.models || []).map((model) => model.name || "").filter(Boolean);
+  } catch { return null; }
+}
+
+async function saveCloudProvider(provider: "anthropic" | "openai"): Promise<boolean> {
+  const label = provider === "anthropic" ? "Claude" : "OpenAI";
+  const key = await vscode.window.showInputBox({
+    title: `CodeTutor — connect ${label}`,
+    prompt: `Type or paste your ${label} API key. It is saved only in mentor-service/.env on this computer.`,
+    placeHolder: `${label} API key`, password: true, ignoreFocusOut: true,
+    validateInput: (value) => validApiKey(value) ? undefined : "Enter a non-empty API key with no spaces.",
+  });
+  if (!key) return false;
+  const updates: ProviderEnv = provider === "anthropic" ? {
+    MENTOR_LLM_MODE: "anthropic", ANTHROPIC_API_KEY: key.trim(),
+    ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+    MENTOR_MODEL: "claude-sonnet-5", MENTOR_MODEL_FAST: "claude-haiku-4-5-20251001",
+  } : {
+    MENTOR_LLM_MODE: "openai", OPENAI_API_KEY: key.trim(),
+    OPENAI_BASE_URL: "https://api.openai.com/v1",
+    MENTOR_MODEL: "gpt-5.4", MENTOR_MODEL_FAST: "gpt-5.4-mini",
+  };
+  await updateEnvFile(mentorEnvPath(), updates);
+  return activateSavedProvider(label);
+}
+
+async function setupLocalProvider(): Promise<boolean> {
+  const models = await ollamaModels();
+  if (models === null) {
+    const installed = await ollamaInstalled();
+    const action = await vscode.window.showInformationMessage(
+      installed
+        ? "Ollama appears to be installed, but it is not running. Open Ollama, then ask CodeTutor to check again."
+        : "No local Ollama service was found. CodeTutor can show the short installation guide.",
+      "Open setup guide", "Check again"
+    );
+    if (action === "Open setup guide") await openLocalSetupGuide();
+    if (action === "Check again") return setupLocalProvider();
+    return false;
+  }
+  if (!models.length) {
+    await openLocalSetupGuide();
+    vscode.window.showWarningMessage("Ollama is running, but no model is installed. Follow the open guide to download the recommended model.");
+    return false;
+  }
+  const preferred = models.includes("qwen2.5-coder:7b") ? "qwen2.5-coder:7b" : models[0];
+  const selected = models.length === 1 ? preferred : await vscode.window.showQuickPick(
+    models.map((name) => ({ label: name, description: name === preferred ? "Recommended from your installed models" : undefined })),
+    { title: "Choose an installed Ollama model", ignoreFocusOut: true }
+  ).then((choice) => choice?.label);
+  if (!selected) return false;
+  await updateEnvFile(mentorEnvPath(), {
+    MENTOR_LLM_MODE: "openai", OPENAI_API_KEY: "", OPENAI_BASE_URL: "http://127.0.0.1:11434/v1",
+    MENTOR_MODEL: selected, MENTOR_MODEL_FAST: selected,
+  });
+  return activateSavedProvider(`Local model ${selected}`);
+}
+
+async function setupProvider(manual = false): Promise<boolean> {
+  const hasKey = await vscode.window.showInformationMessage(
+    "Do you have a Claude or OpenAI API key you would like CodeTutor to use?",
+    { modal: !manual }, "Yes", "No — use a local model"
+  );
+  if (!hasKey) return false;
+  if (hasKey === "No — use a local model") return setupLocalProvider();
+  const provider = await vscode.window.showQuickPick([
+    { label: "OpenAI", description: "Use your own OpenAI API key", id: "openai" as const },
+    { label: "Anthropic Claude", description: "Use your own Anthropic API key", id: "anthropic" as const },
+    { label: "Something else", description: "Other providers are not supported yet", id: "other" as const },
+  ], { title: "Which API key do you have?", ignoreFocusOut: true });
+  if (!provider) return false;
+  if (provider.id === "other") {
+    await vscode.window.showInformationMessage(
+      "CodeTutor currently supports API keys from OpenAI and Anthropic Claude only. No worries — CodeTutor will use a local Ollama model instead."
+    );
+    return setupLocalProvider();
+  }
+  return saveCloudProvider(provider.id);
+}
+
+async function startSession(context: vscode.ExtensionContext, manual: boolean, forceNew = false) {
   if (starting) return;
   // A manual invocation may re-open the goal box even after an auto-prompt.
   if (manual && sessionId === undefined) autoPrompted = true;
@@ -238,6 +495,56 @@ async function startSession(context: vscode.ExtensionContext, manual: boolean) {
       if (!manual) autoPrompted = false;
       return;
     }
+    const onboardingDone = extContext.globalState.get<boolean>(
+      "codetutor.providerOnboardingComplete", false
+    );
+    if (!onboardingDone && !(await setupProvider(false))) {
+      if (!manual) autoPrompted = false;
+      return;
+    }
+    let saved: ResumeResponse | null = null;
+    if (!forceNew) {
+      try { saved = await client.resume("local"); } catch { /* resume is optional */ }
+    }
+    if (saved) {
+      const age = saved.last_activity ? new Date(saved.last_activity * 1000).toLocaleString() : "recently";
+      const choice = await vscode.window.showQuickPick([
+        { label: "Continue lesson", id: "continue" as const,
+          description: `Resume step ${Math.min(saved.current_step + 1, saved.blueprint.length)} of ${saved.blueprint.length}` },
+        { label: "Start a new learning journey", id: "new" as const,
+          description: "Choose teaching level, career path, and a new project" },
+        { label: "Regenerate this blueprint", id: "regenerate" as const,
+          description: "Keep the same goal but rebuild its plan with the current model" },
+      ], {
+        title: `Continue “${saved.goal}”? Last activity: ${age}`,
+        ignoreFocusOut: true,
+      });
+      if (choice?.id === "continue") {
+        learnerLevel = saved.learner_level;
+        learningPath = (saved.pathway_id === "ai-engineer" ? "ai-engineer" : "python-foundations");
+        selectedModuleId = saved.module_id || "";
+        await attachSession(context, saved, true);
+        return;
+      }
+      if (choice?.id === "regenerate") {
+        learnerLevel = saved.learner_level;
+        learningPath = (saved.pathway_id === "ai-engineer" ? "ai-engineer" : "python-foundations");
+        selectedModuleId = saved.module_id || "";
+        const refreshed = await client.startSession(saved.goal, learnerLevel, learningPath, selectedModuleId);
+        await attachSession(context, refreshed, false);
+        return;
+      }
+      if (choice?.id !== "new") {
+        if (!manual) autoPrompted = false;
+        return;
+      }
+    }
+    const selectedLevel = await pickLearnerLevel();
+    if (!selectedLevel) return;
+    learnerLevel = selectedLevel;
+    const selectedPath = await pickLearningPath(selectedLevel);
+    if (!selectedPath) return;
+    learningPath = selectedPath;
     const goal = await pickGoal();
     if (!goal) {
       // If they dismissed the auto-prompt, let it offer again later.
@@ -245,38 +552,139 @@ async function startSession(context: vscode.ExtensionContext, manual: boolean) {
       return;
     }
 
-    panel = MentorPanel.show(context, handleAsk);
-    const res = await client.startSession(goal);
-    sessionId = res.session_id;
-    panel.setBlueprint(res.blueprint || []);
-    // Show the learner's overall path so progress is visible.
-    try {
-      const s = await client.suggestGoals("local");
-      panel.setPath(s.path.levels, s.path.current_level);
-    } catch {
-      /* path is optional */
-    }
-    panel.push({ kind: "blueprint", text: "Here's the plan we'll build toward. Start coding — I'll ride along." });
-
-    // If the file already has code (e.g. you reopened a project you'd started),
-    // give one initial hint so it's mentored even before you type a new line.
-    const existing = currentCode();
-    const pyEditor =
-      vscode.window.activeTextEditor?.document.languageId === "python"
-        ? vscode.window.activeTextEditor
-        : vscode.window.visibleTextEditors.find((e) => e.document.languageId === "python");
-    if (pyEditor && existing.split("\n").filter((l) => l.trim()).length >= 2) {
-      lastHintedCode = existing;
-      lastHintAt = Date.now();
-      react(pyEditor, existing, "completed");
-    }
+    const res = await client.startSession(goal, learnerLevel, learningPath, selectedModuleId);
+    await attachSession(context, res, false);
   } catch (err) {
     autoPrompted = false; // allow a retry if the service was unreachable
     console.error("CodeTutor session start failed:", err);
     vscode.window.showErrorMessage(friendlyError(err));
   } finally {
     starting = false;
+    if (queuedManualStart && !sessionId) {
+      queuedManualStart = false;
+      void startSession(context, true, true);
+    } else if (sessionId) {
+      queuedManualStart = false;
+    }
   }
+}
+
+async function attachSession(context: vscode.ExtensionContext, res: SessionResponse | ResumeResponse,
+                             resumed: boolean) {
+  panel = MentorPanel.show(context, handleAsk, handlePanelAction);
+  sessionId = res.session_id;
+  learningPath = (res.pathway_id === "ai-engineer" ? "ai-engineer" : learningPath);
+  selectedModuleId = res.module_id || selectedModuleId;
+  lastAutomaticGuidanceAt = 0;
+  lastSurfacedFingerprint = "";
+  panel.resetGuidance();
+  readinessPrompted = false;
+  panel.setBlueprint(res.blueprint || []);
+  if ("current_step" in res) {
+    panel.setLessonProgress(res.current_step, res.completed_steps || []);
+    if (res.status === "completed") {
+      nextLesson = res.next;
+      panel.showLessonCheck(res.checks || [], true, res.next);
+    }
+  }
+  try {
+    const s = await client.suggestGoals("local", learningPath, learnerLevel);
+    panel.setPath(s.path.levels, s.path.current_level);
+  } catch { /* path is optional */ }
+  panel.push({ kind: "blueprint", text: resumed
+    ? `Welcome back. Continuing in ${learnerLevel} mode at your saved step.`
+    : `Teaching mode: ${learnerLevel}. Here's the plan we'll build toward.` });
+
+  const existing = currentCode();
+  const pyEditor = vscode.window.activeTextEditor?.document.languageId === "python"
+    ? vscode.window.activeTextEditor
+    : vscode.window.visibleTextEditors.find((e) => e.document.languageId === "python");
+  if (pyEditor) lastPyDoc = pyEditor.document;
+  if (pyEditor && existing.split("\n").filter((l) => l.trim()).length >= 2) {
+    lastHintedCode = existing; lastHintAt = Date.now();
+    react(pyEditor, existing, "completed");
+  } else if (pyEditor && learnerLevel === "beginner") {
+    const idleMs = vscode.workspace.getConfiguration("codetutor").get<number>("idleSeconds", 10) * 1000;
+    scheduleStallCheck(pyEditor, 0, idleMs);
+  }
+}
+
+async function handlePanelAction(action: string) {
+  if (action === "check") await checkCurrentLesson();
+  else if (action === "next") await startNextLesson();
+  else if (action === "review") await showProgress();
+}
+
+async function checkCurrentLesson() {
+  if (!sessionId) { vscode.window.showWarningMessage("Start or resume a CodeTutor lesson first."); return; }
+  // Completion is a whole-program claim. Never apply the privacy-oriented
+  // function-only scope here or valid project behavior outside that function vanishes.
+  const doc = vscode.window.activeTextEditor?.document.languageId === "python"
+    ? vscode.window.activeTextEditor.document : lastPyDoc;
+  const code = doc && !sendingBlocked(doc) ? doc.getText() : "";
+  if (!code.trim()) { vscode.window.showWarningMessage("Add some Python code before running the lesson check."); return; }
+  const run = await vscode.window.showQuickPick([
+    { label: "Yes — I ran it successfully", value: true,
+      detail: "The program completed the behavior I expected without an unhandled error." },
+    { label: "Not yet", value: false, detail: "Check the code structure and show what remains." },
+  ], { title: "Did you run and exercise the program?", ignoreFocusOut: true });
+  if (!run) return;
+  try {
+    const uri = vscode.window.activeTextEditor?.document.uri.toString() || lastPyDoc?.uri.toString() || "";
+    const result = await client.checkLesson(sessionId, code, run.value, uri);
+    nextLesson = result.next;
+    panel?.showLessonCheck(result.checks, result.passed, result.next);
+    if (result.passed) vscode.window.showInformationMessage("Lesson complete. Choose Next lesson when you're ready.");
+  } catch (err) { vscode.window.showErrorMessage(friendlyError(err)); }
+}
+
+async function startNextLesson() {
+  if (!nextLesson) { vscode.window.showInformationMessage("Complete the current lesson check first."); return; }
+  const goal = nextLesson.goal;
+  selectedModuleId = nextLesson.module_id;
+  const res = await client.startSession(goal, learnerLevel, learningPath, selectedModuleId);
+  nextLesson = undefined;
+  await attachSession(extContext, res, false);
+  panel?.push({ kind: "blueprint", text: `New lesson: ${goal}` });
+}
+
+async function pickLearnerLevel(): Promise<LearnerLevel | undefined> {
+  const pick = await vscode.window.showQuickPick([
+    { label: "Beginner", description: "Direct step-by-step guidance with plain-language reasons", id: "beginner" as LearnerLevel },
+    { label: "Intermediate", description: "Recommendations, choices, and implementation trade-offs", id: "intermediate" as LearnerLevel },
+    { label: "Advanced", description: "Architecture, system design, quality, and deeper principles", id: "advanced" as LearnerLevel },
+  ], { title: "How should CodeTutor teach you in this session?", ignoreFocusOut: true });
+  return pick?.id;
+}
+
+async function pickLearningPath(level: LearnerLevel): Promise<LearningPath | undefined> {
+  const aiDescription = level === "beginner"
+    ? "Start with the Python basics AI work depends on, then progress into data, ML, LLM apps, RAG, agents, evals, governance, and deployment"
+    : level === "intermediate"
+      ? "Enter through data and model thinking, then progress into production AI engineering"
+      : "Enter through LLM application engineering, architecture, evaluation, safety, governance, and production operations";
+  const choice = await vscode.window.showQuickPick([
+    { label: "AI Engineer & AI Expert", description: aiDescription, id: "ai-engineer" as LearningPath },
+    { label: "General Python", description: "Build broad Python capability through progressively more substantial projects", id: "python-foundations" as LearningPath },
+  ], {
+    title: "Which learning journey do you want CodeTutor to guide?",
+    placeHolder: "Your teaching level controls explanation depth; your journey controls what you learn.",
+    ignoreFocusOut: true,
+  });
+  return choice?.id;
+}
+
+async function changeLevel() {
+  if (!sessionId) {
+    vscode.window.showWarningMessage("Start a CodeTutor session first.");
+    return;
+  }
+  const level = await pickLearnerLevel();
+  if (!level) return;
+  const updated = await client.setLevel(sessionId, level);
+  learnerLevel = level;
+  panel?.setBlueprint(updated.blueprint || []);
+  panel?.push({ kind: "answer", text: `Teaching mode changed to ${level}. Future guidance will use this depth and style.` });
 }
 
 // The chat input: the learner typed a free-form question in the panel.
@@ -291,9 +699,13 @@ async function handleAsk(text: string) {
     return;
   }
   const code = currentCode();
+  explicitRequestInFlight = true;
   try {
     const msg = await client.sendEvent(sessionId, "ask", code, { question: text });
-    if (msg && panel) panel.push(msg);
+    if (msg && panel) {
+      applyLessonMetadata(msg, code);
+      panel.push(msg);
+    }
     else if (panel) panel.thinking(false);
   } catch (err) {
     if (panel) {
@@ -301,6 +713,8 @@ async function handleAsk(text: string) {
       console.error("CodeTutor ask failed:", err);
       panel.push({ kind: "answer", text: friendlyError(err) });
     }
+  } finally {
+    explicitRequestInFlight = false;
   }
 }
 
@@ -309,7 +723,7 @@ async function handleAsk(text: string) {
 async function pickGoal(): Promise<string | undefined> {
   let suggestions: GoalSuggestion[] = [];
   try {
-    suggestions = (await client.suggestGoals("local")).suggestions;
+    suggestions = (await client.suggestGoals("local", learningPath, learnerLevel)).suggestions;
   } catch {
     /* service may be down; fall back to a plain input box */
   }
@@ -329,8 +743,14 @@ async function pickGoal(): Promise<string | undefined> {
       matchOnDetail: true,
     });
     if (!pick) return undefined;
-    if (pick.label !== TYPE_OWN) return pick.label;
+    if (pick.label !== TYPE_OWN) {
+      const selected = suggestions.find((suggestion) => suggestion.goal === pick.label);
+      selectedModuleId = selected?.module_id || "";
+      return pick.label;
+    }
   }
+
+  selectedModuleId = "";
 
   return vscode.window.showInputBox({
     prompt: "CodeTutor: what are you trying to build?",
@@ -355,6 +775,9 @@ function onEdit(e: vscode.TextDocumentChangeEvent) {
   const code = scoped.text;
   const cfg = vscode.workspace.getConfiguration("codetutor");
   const idleMs = cfg.get<number>("idleSeconds", 10) * 1000;
+  const activeLine = editor.document.lineAt(editor.selection.active.line).text;
+  const incompleteIdleMs = cfg.get<number>("incompleteIdleSeconds", 4) * 1000;
+  const stallMs = looksUnfinished(activeLine) ? Math.min(idleMs, incompleteIdleMs) : idleMs;
   const minGapMs = cfg.get<number>("minHintGapMs", 6000);
 
   // A hint fires on LINE COMPLETION (you pressed Enter), not on every pause — this is
@@ -366,27 +789,51 @@ function onEdit(e: vscode.TextDocumentChangeEvent) {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (completedLine) {
-    debounceTimer = setTimeout(() => {
+    const version = editor.document.version;
+    const graceMs = cfg.get<number>("compositionGraceMs", 2500);
+    debounceTimer = setTimeout(async () => {
+      if (editor.document.version !== version) return;
       // Dedup + throttle so repeated saves/edits don't re-trigger the same advice.
       if (code === lastHintedCode) return;
       if (Date.now() - lastHintAt < minGapMs) return;
       lastHintedCode = code;
       lastHintAt = Date.now();
-      react(editor, code, "completed", scoped.startLine, editedLine - scoped.startLine);
-    }, 500);
-    // The completed-line response already diagnoses syntax/context. Do not stack a
-    // second idle intervention for the same snapshot.
+      await react(editor, code, "completed", scoped.startLine, editedLine - scoped.startLine);
+      if (editor.document.version === version) scheduleStallCheck(editor, scoped.startLine, stallMs);
+    }, graceMs);
     return;
   }
 
-  // Stuck still fires on prolonged idle, and only once per frozen state.
-  idleTimer = setTimeout(() => {
-    const sig = code.trimEnd();
-    if (sig === lastStuckSignature) return;
-    lastStuckSignature = sig;
-    lastHintAt = Date.now();
-    react(editor, code, "stuck", scoped.startLine);
-  }, idleMs);
+  scheduleStallCheck(editor, scoped.startLine, stallMs);
+}
+
+function scheduleStallCheck(editor: vscode.TextEditor, startLine: number, idleMs: number) {
+  if (idleTimer) clearTimeout(idleTimer);
+  const version = editor.document.version;
+  const readingMs = vscode.workspace.getConfiguration("codetutor")
+    .get<number>("guidanceReadingSeconds", 25) * 1000;
+  const readingRemaining = Math.max(0, lastAutomaticGuidanceAt + readingMs - Date.now());
+  const delayMs = Math.max(idleMs, readingRemaining);
+  idleTimer = setTimeout(async () => {
+    if (editor.document.version !== version || paused || !sessionId) return;
+    const scoped = scopeCode(editor.document, editor.selection.active);
+    const msg = await react(editor, scoped.text, "stuck", scoped.startLine);
+    // Continued inactivity escalates one level at a time. Any edit changes the version,
+    // cancels this chain, and resets escalation in the mentor session.
+    if (editor.document.version === version && (msg?.escalation_level || 1) < 4) {
+      scheduleStallCheck(editor, startLine, idleMs);
+    }
+  }, delayMs);
+}
+
+function looksUnfinished(line: string): boolean {
+  const text = line.trim();
+  if (!text) return false;
+  // A learner who types only `import` or `from` is often asking, “Which tool do I
+  // need for my goal?” Treat that pause as intentional help-seeking.
+  if (/^(import|from)\s*$/.test(text)) return true;
+  if (/^(if|elif|while|for|def|class)\b/.test(text) && !text.endsWith(":")) return true;
+  return /(?:\b(?:in|and|or|not|return|as)|[=+\-*/%<>,([{.:])\s*$/.test(text);
 }
 
 async function react(
@@ -395,16 +842,27 @@ async function react(
   type: "completed" | "stuck",
   startLine = 0,
   scopedTargetLine?: number
-) {
-  if (!sessionId || !outboundAllowed(editor.document) || automaticRequestInFlight) return;
+): Promise<MentorMessage | null> {
+  const readingMs = vscode.workspace.getConfiguration("codetutor")
+    .get<number>("guidanceReadingSeconds", 25) * 1000;
+  if (!sessionId || !outboundAllowed(editor.document) || automaticRequestInFlight || explicitRequestInFlight) return null;
+  if (lastAutomaticGuidanceAt && Date.now() - lastAutomaticGuidanceAt < readingMs) return null;
   automaticRequestInFlight = true;
+  const requestedVersion = editor.document.version;
+  const requestedUri = editor.document.uri.toString();
   try {
     const idle = vscode.workspace.getConfiguration("codetutor").get<number>("idleSeconds", 10);
     const msg = await client.sendEvent(sessionId, type, code,
       type === "stuck" ? { idleSeconds: idle } : { line: scopedTargetLine });
     if (msg) {
+      // The learner may keep typing while a model responds. Never show advice for an
+      // older snapshot as though it describes the current editor.
+      if (editor.document.uri.toString() !== requestedUri || editor.document.version !== requestedVersion) {
+        return null;
+      }
       if (msg.line && startLine) msg.line += startLine;
       surface(editor, msg);
+      return msg;
     }
   } catch (err) {
     // Stay quiet on transient errors — a mentor that spams error toasts is worse than silence.
@@ -412,6 +870,7 @@ async function react(
   } finally {
     automaticRequestInFlight = false;
   }
+  return null;
 }
 
 class TutorCodeActions implements vscode.CodeActionProvider {
@@ -422,13 +881,21 @@ class TutorCodeActions implements vscode.CodeActionProvider {
     const ask = new vscode.CodeAction("CodeTutor: Ask about this line", vscode.CodeActionKind.QuickFix);
     ask.command = { command: "codetutor.askLine", title: "Ask about this line",
                     arguments: [range.start.line] };
-    return [explain, ask];
+    const fix = new vscode.CodeAction("CodeTutor: Fix this line and explain", vscode.CodeActionKind.QuickFix);
+    fix.command = { command: "codetutor.fixLine", title: "Fix this line and explain",
+                    arguments: [range.start.line] };
+    return [explain, ask, fix];
   }
 }
 
-function surface(editor: vscode.TextEditor, msg: MentorMessage) {
+function surface(editor: vscode.TextEditor, msg: MentorMessage, automatic = true) {
+  applyLessonMetadata(msg, editor.document.getText());
+  const fingerprint = `${msg.kind}:${msg.line || 0}:${msg.headline || msg.text}`;
+  if (fingerprint === lastSurfacedFingerprint) return;
+  lastSurfacedFingerprint = fingerprint;
   // Full what/why/how goes to the chat panel.
-  if (panel) panel.push(msg);
+  if (panel) automatic ? panel.coach(msg) : panel.push(msg);
+  if (automatic) lastAutomaticGuidanceAt = Date.now();
 
   // Short hint renders as a CodeLens one line ABOVE the relevant code line.
   // Prefer the mentor's purpose-built headline (guaranteed short, never truncated);
@@ -458,6 +925,30 @@ function surface(editor: vscode.TextEditor, msg: MentorMessage) {
           }
         }
       });
+  }
+}
+
+function applyLessonMetadata(msg: MentorMessage, code: string) {
+  if (msg.lesson_progress) {
+    panel?.setLessonProgress(
+      msg.lesson_progress.current_step,
+      msg.lesson_progress.completed_steps || []
+    );
+  }
+  const ready = msg.lesson_readiness;
+  if (!ready || ready.passed || !code || code === lastReadyCode || readinessPrompted) return;
+  const failed = ready.checks.filter((check) => !check.passed);
+  if (failed.length === 1 && failed[0].id === "run") {
+    lastReadyCode = code;
+    readinessPrompted = true;
+    panel?.push({
+      kind: "next_step",
+      text: "Your code now meets the structural requirements for this lesson. Run and exercise it, then click ‘Run lesson check’ to verify completion.",
+      via: "lesson checker",
+    });
+    vscode.window.showInformationMessage(
+      "CodeTutor: the lesson is ready to run. After testing it, choose Run lesson check."
+    );
   }
 }
 
@@ -513,7 +1004,7 @@ async function explainLine() {
     const msg = await client.sendEvent(sessionId, "why", scoped.text, { line });
     if (msg) {
       if (msg.line && scoped.startLine) msg.line += scoped.startLine;
-      surface(editor, msg);
+      surface(editor, msg, false);
     }
   } catch (err) {
     console.error("CodeTutor explainLine failed:", err);
@@ -546,6 +1037,41 @@ async function askLine(lineArg?: number) {
   }
 }
 
+async function fixLine(lineArg?: number) {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !sessionId) {
+    vscode.window.showWarningMessage("Start a CodeTutor session first.");
+    return;
+  }
+  if (!outboundAllowed(editor.document, true)) return;
+  const documentLine = lineArg ?? editor.selection.active.line;
+  const scoped = scopeCode(editor.document, new vscode.Position(documentLine, 0));
+  const scopedLine = documentLine - scoped.startLine + 1;
+  try {
+    const msg = await client.sendEvent(sessionId, "fix", scoped.text, { line: scopedLine });
+    if (!msg) return;
+    if (!msg.replacement) {
+      if (panel) panel.push(msg);
+      vscode.window.showInformationMessage(msg.text);
+      return;
+    }
+    const current = editor.document.lineAt(documentLine).text;
+    const choice = await vscode.window.showInformationMessage(
+      `CodeTutor proposes:\n${current.trim()}  →  ${msg.replacement.trim()}`,
+      { modal: true, detail: msg.text }, "Apply fix"
+    );
+    if (choice !== "Apply fix") return;
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(editor.document.uri, editor.document.lineAt(documentLine).range, msg.replacement);
+    if (await vscode.workspace.applyEdit(edit)) {
+      msg.text = `Fixed line ${documentLine + 1}. ${msg.text}`;
+      if (panel) panel.push(msg);
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(friendlyError(err));
+  }
+}
+
 function friendlyError(err: unknown): string {
   const raw = String(err);
   if (/429|quota|usage limit|insufficient_quota/i.test(raw)) {
@@ -560,7 +1086,19 @@ function friendlyError(err: unknown): string {
 // configured providers (Claude + OpenAI). Applies immediately, no restart.
 async function changeModel() {
   if (!sessionId) {
-    vscode.window.showWarningMessage("Start a CodeTutor session first.");
+    const choice = await vscode.window.showInformationMessage(
+      "No tutoring session is active yet. Set up the model provider first; you can choose a specific model after the lesson starts.",
+      "Set up provider"
+    );
+    if (choice === "Set up provider") {
+      const ready = await setupProvider(true);
+      if (ready) {
+        const start = await vscode.window.showInformationMessage(
+          "The provider is ready. Start your first CodeTutor lesson now?", "Start lesson"
+        );
+        if (start === "Start lesson") await startSession(extContext, true);
+      }
+    }
     return;
   }
   let info: { models: string[]; default: string; fast: string };
@@ -592,8 +1130,18 @@ async function changeModel() {
 
   try {
     await client.setModel(sessionId, pick.label);
+    providerLabel = pick.label;
+    updateStatus();
     if (panel) panel.push({ kind: "explain", text: `Model switched to \`${pick.label}\` for this session.` });
     vscode.window.showInformationMessage(`CodeTutor now using ${pick.label}.`);
+    // If the learner changed models because the previous guidance was weak, do not
+    // leave them waiting on an exhausted idle chain. Re-evaluate the unchanged code
+    // once with the newly selected model.
+    const editor = vscode.window.visibleTextEditors.find((item) => item.document.languageId === "python");
+    if (editor) {
+      const scope = scopeCode(editor.document, editor.selection.active);
+      scheduleStallCheck(editor, scope.startLine, 750);
+    }
   } catch (err) {
     console.error("CodeTutor model change failed:", err);
     vscode.window.showErrorMessage(friendlyError(err));

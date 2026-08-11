@@ -23,13 +23,36 @@ MENTOR_PERSONA = (
 
 BLUEPRINT_SYSTEM = (
     MENTOR_PERSONA
-    + " The learner has stated a goal. Produce a short, high-level BLUEPRINT: the "
-    "ordered steps to get there, described in plain language — NOT code. Each step is "
-    "one short line naming what to do and, in a few words, why it matters. "
-    "Return 4-8 steps. Do not write any code. Do not number sub-steps."
+    + " The learner has stated a goal. Produce an ordered implementation BLUEPRINT. "
+    "Return 4-8 steps and do not number sub-steps. BEGINNER: make every step directly "
+    "actionable, name the exact beginner construct to use (`input()`, a function, an "
+    "`if`, a list, or an import when truly needed), say where it goes, and explain why. "
+    "Explicitly say when no import is needed. Small code fragments are allowed, but never "
+    "provide the complete program. INTERMEDIATE/ADVANCED: stay concise and emphasize "
+    "choices, trade-offs, design, and verification at the appropriate depth."
 )
 
-BLUEPRINT_USER = "Goal: {goal}\n\nGive the blueprint as a short ordered list of steps."
+BLUEPRINT_USER = (
+    "Goal: {goal}\nTeaching level: {level}\n\n"
+    "Give the blueprint as a short ordered list of observable implementation steps. "
+    "For a beginner, state concrete actions and why; do not make them invent the plan."
+)
+
+BLUEPRINT_REPAIR_SYSTEM = (
+    MENTOR_PERSONA
+    + " You are revising a teaching blueprint that failed a product quality check. "
+    "Return only a new ordered list of 4-8 steps. Preserve the learner's goal and level. "
+    "For a beginner, give the exact next construct or tiny code fragment, where it goes, "
+    "and why it is needed; explicitly state the required import or that none is needed. "
+    "Do not provide the complete solution. For intermediate and advanced learners, adjust "
+    "the depth toward implementation choices or architecture respectively."
+)
+
+BLUEPRINT_REPAIR_USER = (
+    "Goal: {goal}\nTeaching level: {level}\n"
+    "Quality problems: {problems}\n\nDraft that must be rewritten:\n{draft}\n\n"
+    "Return the improved ordered blueprint only."
+)
 
 HEADLINE_FORMAT = (
     " FORMAT YOUR REPLY as: a first line that is a SHORT headline — at most 8 words, "
@@ -44,15 +67,19 @@ NEXT_STEP_SYSTEM = (
     "code, and where they are in the plan, give ONE short next-step hint. Explain WHY "
     "that is the next move, tied to the goal. Do not write the code for them — nudge "
     "toward it. If they just used a concept for the first time, you may add one short "
-    "clause on what it is. Max 2 sentences." + HEADLINE_FORMAT
+    "clause on what it is. BEGINNER: state the concrete next action and why; do not ask "
+    "them to design the next step. INTERMEDIATE: recommend an action and expose one useful "
+    "choice. ADVANCED: discuss principles, trade-offs, and architecture. Max 3 sentences." + HEADLINE_FORMAT
 )
 
 NEXT_STEP_USER = (
     "{profile}\n\n"
-    "Goal: {goal}\n\n"
+    "Goal: {goal}\nTeaching level: {level}\nCurrent plan step: {current_step}\n\n"
     "Blueprint:\n{blueprint}\n\n"
     "Current code:\n```python\n{code}\n```\n\n"
+    "Parser-verified facts (these override any guess):\n{facts}\n\n"
     "The learner just wrote this line: `{last_line}`\n"
+    "Hint level {hint_level}: {hint_policy}\n"
     "{curiosity}\n"
     "Give the next-step hint with reasoning."
 )
@@ -62,17 +89,21 @@ STUCK_SYSTEM = (
     + " The learner has PAUSED — they seem stuck. Their last line may be unfinished "
     "(e.g. `for i in `). Gently help them finish THIS line or take the next step. "
     "Ask a guiding question or point at what is missing, and say why. Do NOT just hand "
-    "them the answer. Warm and brief. Max 2 sentences." + HEADLINE_FORMAT
+    "them the answer. For BEGINNER, directly state the current plan step and why before "
+    "inviting an attempt. For INTERMEDIATE, recommend; for ADVANCED, probe trade-offs. "
+    "Warm and brief. Max 3 sentences." + HEADLINE_FORMAT
 )
 
 STUCK_USER = (
     "{profile}\n\n"
-    "Goal: {goal}\n\n"
+    "Goal: {goal}\nTeaching level: {level}\nCurrent plan step: {current_step}\n\n"
     "Blueprint:\n{blueprint}\n\n"
     "Current code:\n```python\n{code}\n```\n\n"
+    "Parser-verified facts (these override any guess):\n{facts}\n\n"
     "They have been idle for {idle}s. Last line: `{last_line}` "
     "(this line looks {completeness}).\n"
     "Condition guidance from deterministic analysis: {condition_guidance}\n"
+    "Hint level {hint_level}: {hint_policy}\n"
     "Give a gentle, guiding nudge."
 )
 
@@ -105,7 +136,7 @@ CONTEXT_CORRECTION_SYSTEM = (
 
 CONTEXT_CORRECTION_USER = (
     "{profile}\n\n"
-    "Goal: {goal}\n\n"
+    "Goal: {goal}\nTeaching level: {level}\nCurrent plan step: {current_step}\n\n"
     "Current code:\n```python\n{code}\n```\n\n"
     "Structural finding: {summary}\n"
     "Primary line: {line}; related line: {related_line}.\n"
@@ -157,6 +188,7 @@ WHY_SYSTEM = (
 WHY_USER = (
     "{profile}\n\n"
     "Full code:\n```python\n{code}\n```\n\n"
+    "Parser-verified facts (these override any guess):\n{facts}\n\n"
     "They are asking about line {line}: `{text}`"
     "{symbol}\n"
     "Explain why it's here."
@@ -173,8 +205,23 @@ ASK_SYSTEM = (
 
 ASK_USER = (
     "{profile}\n\n"
-    "Goal: {goal}\n\n"
+    "Goal: {goal}\nTeaching level: {level}\nCurrent plan step: {current_step}\n\n"
     "Their current code:\n```python\n{code}\n```\n\n"
+    "Parser-verified facts (these override any guess):\n{facts}\n\n"
     "Question: {question}\n"
     "Answer helpfully, in their context."
+)
+
+FIX_SYSTEM = (
+    MENTOR_PERSONA
+    + " The learner explicitly requested a fix to exactly one selected line. Return exactly "
+    "two fields: REPLACEMENT: followed by one replacement line, then EXPLANATION: followed "
+    "by at most three beginner-friendly sentences. Preserve indentation. Do not change any "
+    "other line and do not put the response in a code fence."
+)
+
+FIX_USER = (
+    "Full code:\n```python\n{code}\n```\n\n"
+    "Selected line {line}: `{text}`\n"
+    "Correct only this line and explain the error, the change, and why it works."
 )

@@ -2,19 +2,19 @@
   "name": "codetutor-mentor",
   "displayName": "CodeTutor Mentor",
   "description": "An in-editor pair-programming mentor: blueprint, next-step hints, error coaching, and a nudge when you're stuck.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "codetutor",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": ["Education", "Other"],
-  "activationEvents": ["onLanguage:python"],
+  "activationEvents": ["onStartupFinished", "onLanguage:python"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "codetutor.start",
-        "title": "CodeTutor: Start a mentored session (set a goal)"
+        "title": "CodeTutor: Start a new learning journey"
       },
       {
         "command": "codetutor.explainLine",
@@ -25,12 +25,36 @@
         "title": "CodeTutor: Ask about this line"
       },
       {
+        "command": "codetutor.fixLine",
+        "title": "CodeTutor: Fix this line and explain"
+      },
+      {
         "command": "codetutor.changeModel",
-        "title": "CodeTutor: Change model (Claude / OpenAI)"
+        "title": "CodeTutor: Change model for current session"
+      },
+      {
+        "command": "codetutor.changeLevel",
+        "title": "CodeTutor: Change teaching level"
+      },
+      {
+        "command": "codetutor.setupProvider",
+        "title": "CodeTutor: Set up model provider"
+      },
+      {
+        "command": "codetutor.resetProviderOnboarding",
+        "title": "CodeTutor: Reset provider onboarding for demo"
       },
       {
         "command": "codetutor.showProgress",
         "title": "CodeTutor: Show my progress"
+      },
+      {
+        "command": "codetutor.checkLesson",
+        "title": "CodeTutor: Run current lesson check"
+      },
+      {
+        "command": "codetutor.nextLesson",
+        "title": "CodeTutor: Start next lesson"
       },
       {
         "command": "codetutor.togglePause",
@@ -40,7 +64,8 @@
     "menus": {
       "editor/context": [
         { "command": "codetutor.askLine", "when": "editorLangId == python", "group": "codetutor@1" },
-        { "command": "codetutor.explainLine", "when": "editorLangId == python", "group": "codetutor@2" }
+        { "command": "codetutor.explainLine", "when": "editorLangId == python", "group": "codetutor@2" },
+        { "command": "codetutor.fixLine", "when": "editorLangId == python", "group": "codetutor@3" }
       ]
     },
     "configuration": {
@@ -56,15 +81,33 @@
           "default": 10,
           "description": "Seconds of inactivity before the mentor pitches in when you seem stuck."
         },
+        "codetutor.incompleteIdleSeconds": {
+          "type": "number",
+          "default": 4,
+          "minimum": 2,
+          "description": "Shorter pause used when the current line ends with an unfinished keyword, operator, bracket, condition, function, class, or import."
+        },
         "codetutor.debounceMs": {
           "type": "number",
           "default": 1200,
           "description": "How long to wait after you stop typing before reacting to a completed line."
         },
+        "codetutor.compositionGraceMs": {
+          "type": "number",
+          "default": 2500,
+          "minimum": 500,
+          "description": "Quiet period after completing a line before CodeTutor evaluates it, allowing normal multi-line composition to continue."
+        },
         "codetutor.minHintGapMs": {
           "type": "number",
           "default": 6000,
           "description": "Minimum time between automatic hints, to avoid flooding you with near-identical advice."
+        },
+        "codetutor.guidanceReadingSeconds": {
+          "type": "number",
+          "default": 25,
+          "minimum": 10,
+          "description": "Minimum time current automatic guidance stays visible before CodeTutor may replace it. Explicit questions are never delayed."
         },
         "codetutor.enableHoverExplanations": {
           "type": "boolean",

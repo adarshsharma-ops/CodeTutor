@@ -1,5 +1,5 @@
 """Tests for multi-provider config, routing, and per-session model override."""
-from mentor.config import Config, provider_for
+from mentor.config import Config, is_local_openai_endpoint, provider_for
 from mentor.llm import LLMClient
 from mentor.learner_model import LearnerModel
 from mentor.mentor import Mentor
@@ -20,6 +20,51 @@ def test_provider_inferred_from_model_name():
     assert provider_for("gpt-5.4") == "openai"
     assert provider_for("gpt-4o-mini") == "openai"
     assert provider_for("o3") == "openai"
+
+
+def test_explicit_offline_mode_overrides_local_ollama(monkeypatch):
+    monkeypatch.setenv("MENTOR_LLM_MODE", "offline")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+
+    config = Config.from_env()
+
+    assert config.offline is True
+    assert config.mode == "offline"
+    assert config.available_providers() == []
+
+
+def test_only_loopback_endpoints_are_keyless():
+    assert is_local_openai_endpoint("http://127.0.0.1:11434/v1")
+    assert is_local_openai_endpoint("http://localhost:11434/v1")
+    assert is_local_openai_endpoint("http://[::1]:11434/v1")
+    assert not is_local_openai_endpoint("https://api.openai.com/v1")
+    assert not is_local_openai_endpoint("https://ollama.example.com/v1")
+
+
+def test_local_ollama_is_available_without_api_key():
+    c = _cfg(openai="", model="qwen2.5-coder:7b", fast="qwen2.5-coder:7b")
+    c.openai_base_url = "http://127.0.0.1:11434/v1"
+    assert c.offline is False
+    assert c.available_providers() == ["openai"]
+    assert c.has_provider("openai") is True
+
+
+def test_anthropic_mode_ignores_leftover_local_ollama_url():
+    c = _cfg(anthropic="sk-ant", model="claude-sonnet-5")
+    c.llm_mode = "anthropic"
+    c.openai_base_url = "http://127.0.0.1:11434/v1"
+    assert c.local_openai is False
+    assert c.mode == "anthropic"
+
+
+def test_local_ollama_chat_does_not_require_api_key(monkeypatch):
+    c = _cfg(openai="", model="qwen2.5-coder:7b", fast="qwen2.5-coder:7b")
+    c.openai_base_url = "http://localhost:11434/v1"
+    client = LLMClient(c)
+    monkeypatch.setattr(client, "_post_chat", lambda *_args, **_kwargs: "local answer")
+    assert client.chat("teach clearly", "explain this") == "local answer"
 
 
 def test_offline_when_no_keys():

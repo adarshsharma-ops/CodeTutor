@@ -51,6 +51,7 @@ class Analysis:
     last_line: str = ""
     last_line_complete: bool = True   # False when the last non-empty line looks unfinished
     condition_hint: Optional[str] = None  # operator/intent guidance for a paused condition
+    verified_facts: List[str] = field(default_factory=list)  # parser-derived; safe prompt grounding
 
     @property
     def has_syntax_issue(self) -> bool:
@@ -97,6 +98,9 @@ def analyze(source: str) -> Analysis:
         misconceptions = detect_misconceptions(tree)
         fingerprints = concept_fingerprints(tree, imports)
         context_issues = detect_context_issues(tree)
+        verified_facts = structural_facts(tree)
+    else:
+        verified_facts = []
 
     last_line = _last_nonempty_line(source)
     complete = _looks_complete(last_line)
@@ -114,7 +118,31 @@ def analyze(source: str) -> Analysis:
         last_line=last_line,
         last_line_complete=complete,
         condition_hint=condition_hint,
+        verified_facts=verified_facts,
     )
+
+
+def structural_facts(tree: ast.AST) -> List[str]:
+    """Small, parser-proven facts used to ground model explanations."""
+    facts: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            methods = [n.name for n in node.body
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            facts.append(f"class `{node.name}` has direct methods: {', '.join(methods) or 'none'}")
+            attributes = sorted({n.attr for n in ast.walk(node)
+                                 if isinstance(n, ast.Attribute)
+                                 and isinstance(n.value, ast.Name) and n.value.id == "self"
+                                 and isinstance(n.ctx, ast.Store)})
+            if attributes:
+                facts.append(f"class `{node.name}` already stores: {', '.join(attributes)}")
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            names = sorted(n.id for n in ast.walk(node.target) if isinstance(n, ast.Name))
+            if names:
+                facts.append(f"loop on line {node.lineno} assigns: {', '.join(names)}")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            facts.append(f"line {node.lineno} already calls `{node.func.attr}`")
+    return facts
 
 
 def condition_guidance(line: str) -> Optional[str]:
@@ -160,6 +188,246 @@ def detect_context_issues(tree: ast.AST) -> List[ContextIssue]:
     can be explained from Python's execution rules.
     """
     issues: List[ContextIssue] = []
+    defined_functions = {
+        node.name: node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    # A function is callable behavior, not the collection that it changes. A beginner
+    # writing `add_task.append(x)` has selected the function name instead of the list.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and isinstance(node.func.value, ast.Name) \
+                and node.func.value.id in defined_functions \
+                and node.func.attr in {"append", "extend", "add", "update"}:
+            name = node.func.value.id
+            issues.append(ContextIssue(
+                code="collection_method_on_function", line=node.lineno,
+                related_line=defined_functions[name].lineno,
+                summary=f"`{name}` is a function, not a collection",
+                explanation=(
+                    f"`{name}` was created with `def`, so call it as `{name}(...)`. "
+                    "Use `.append(...)` on the list that stores the items, not on the function."
+                ),
+            ))
+
+    # Returning a locally defined function name returns the function object itself. This
+    # is occasionally intentional, but in a first guided project it is almost always a
+    # confusion between the action and the value that action changes.
+    for fn in defined_functions.values():
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Name) \
+                    and node.value.id in defined_functions:
+                returned = node.value.id
+                issues.append(ContextIssue(
+                    code="returns_function_object", line=node.lineno,
+                    related_line=defined_functions[returned].lineno,
+                    summary=f"This returns the function `{returned}`, not its result",
+                    explanation=(
+                        f"`return {returned}` sends the function itself back without running it. "
+                        "Return the value the caller needs, or omit `return` when the function only updates a list."
+                    ),
+                ))
+
+    # Comparing a function name with a value does not run the function. Parentheses are
+    # required to obtain its result.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        for operand in [node.left, *node.comparators]:
+            if isinstance(operand, ast.Name) and operand.id in defined_functions:
+                issues.append(ContextIssue(
+                    code="function_compared_without_call", line=node.lineno,
+                    related_line=defined_functions[operand.id].lineno,
+                    summary=f"`{operand.id}` is compared without being called",
+                    explanation=(
+                        f"`{operand.id}` names the function. `{operand.id}()` runs it and returns a value. "
+                        "For a menu, call it once, store that returned choice, then compare the stored choice."
+                    ),
+                ))
+
+    # Input-producing helpers should be called once per loop and stored. Calling the same
+    # helper in if/elif tests asks the learner again for every comparison.
+    input_functions = {
+        name for name, fn in defined_functions.items()
+        if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "input"
+               for n in ast.walk(fn))
+    }
+    for loop in (n for n in ast.walk(tree) if isinstance(n, ast.While)):
+        condition_calls = [
+            n for stmt in loop.body for n in ast.walk(stmt)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id in input_functions
+            and isinstance(stmt, (ast.If, ast.Expr))
+        ]
+        by_name: dict[str, list[ast.Call]] = {}
+        for call in condition_calls:
+            by_name.setdefault(call.func.id, []).append(call)
+        for name, calls in by_name.items():
+            if len(calls) >= 2:
+                issues.append(ContextIssue(
+                    code="repeated_input_function_in_conditions", line=calls[0].lineno,
+                    related_line=defined_functions[name].lineno,
+                    summary=f"`{name}()` asks for input repeatedly",
+                    explanation=(
+                        f"Every call to `{name}()` runs `input()` again. At the start of each loop, "
+                        f"store one result such as `choice = {name}()`, then compare `choice` in the branches."
+                    ),
+                ))
+
+    # Comparing a method itself to text is valid Python but almost never the intended
+    # beginner behavior: `name.upper == "C"` needs `upper()` to produce uppercase text.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = [node.left, *node.comparators]
+        for operand in operands:
+            if isinstance(operand, ast.Attribute) and operand.attr in {"upper", "lower", "strip"}:
+                issues.append(ContextIssue(
+                    code="method_reference_not_called",
+                    line=operand.lineno,
+                    related_line=operand.lineno,
+                    summary=f"`{operand.attr}` is referenced but not run",
+                    explanation=(
+                        f"`.{operand.attr}` names the text tool itself. Add parentheses—"
+                        f"`.{operand.attr}()`—to run it and compare the resulting text."
+                    ),
+                ))
+
+    # A standalone call to a user function with a returned value discards that value.
+    returning_functions = {
+        node.name for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(isinstance(child, ast.Return) and child.value is not None
+                for child in ast.walk(node))
+    }
+    side_effect_functions = {
+        node.name for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                and child.func.attr in {"append", "extend", "add", "update", "remove", "pop", "clear"}
+                for child in ast.walk(node))
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) \
+                and isinstance(node.value.func, ast.Name) \
+                and node.value.func.id in returning_functions \
+                and node.value.func.id not in side_effect_functions:
+            issues.append(ContextIssue(
+                code="discarded_return_value",
+                line=node.lineno,
+                related_line=node.lineno,
+                summary=f"The result from `{node.value.func.id}()` is thrown away",
+                explanation=(
+                    "This function sends a value back with `return`, but this call does not "
+                    "store or print it. Assign the call to a name or pass it to `print()` so "
+                    "the converted result can be used."
+                ),
+            ))
+
+    # A menu choice read before `while True` never changes during the loop. The learner
+    # sees the menu repeat but cannot make a new choice, which is a common placement bug.
+    top_level_input_assignments: dict[str, ast.Assign] = {}
+    for stmt in getattr(tree, "body", []):
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call) \
+                and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id == "input":
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    top_level_input_assignments[target.id] = stmt
+    for loop in (node for node in ast.walk(tree) if isinstance(node, ast.While)):
+        loaded = {node.id for node in ast.walk(loop) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+        reassigned = {target.id for node in ast.walk(loop) if isinstance(node, ast.Assign)
+                      for target in node.targets if isinstance(target, ast.Name)}
+        for name in loaded & top_level_input_assignments.keys() - reassigned:
+            issues.append(ContextIssue(
+                code="input_outside_loop", line=top_level_input_assignments[name].lineno,
+                related_line=loop.lineno,
+                summary=f"`{name}` is read before the loop and never refreshed",
+                explanation=(
+                    f"Move `{name} = input(...)` inside the loop, before the `if` branches. "
+                    "Then every menu repetition waits for a new choice instead of reusing the first one."
+                ),
+            ))
+
+    # A question-looking string passed straight to a task-adding function is probably a
+    # prompt that was meant to be shown through input(), not the task itself.
+    string_assignments: dict[str, ast.Assign] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str) and "?" in node.value.value:
+            for target in node.targets:
+                if isinstance(target, ast.Name): string_assignments[target.id] = node
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        for argument in call.args:
+            if isinstance(argument, ast.Name) and argument.id in string_assignments:
+                assigned = string_assignments[argument.id]
+                issues.append(ContextIssue(
+                    code="prompt_string_used_as_value", line=assigned.lineno,
+                    related_line=call.lineno,
+                    summary=f"`{argument.id}` stores the question text, not the learner's answer",
+                    explanation=(
+                        f"Wrap that question in `input(...)`: `{argument.id} = input(\"...\")`. "
+                        "The prompt is displayed, and the text the learner types is stored in the variable."
+                    ),
+                ))
+
+    # A capitalized top-level `def` is valid, but beginners often use it while deciding
+    # between a function and a class. Ask rather than silently forcing either design.
+    for node in getattr(tree, "body", []):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name[:1].isupper():
+            issues.append(ContextIssue(
+                code="function_or_class_intent",
+                line=node.lineno,
+                related_line=node.lineno,
+                summary="Function or class?",
+                explanation=(
+                    f"`def {node.name}` creates one callable action. `class {node.name}` "
+                    "would create a kind of object that can remember data and offer several actions. "
+                    "Both can be valid; the choice depends on what you want to practise."
+                ),
+                ask_intent=True,
+            ))
+
+    # Class structure is deterministic: direct functions are methods; a function nested
+    # inside __init__ is only a local function and cannot be called as obj.name().
+    for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+        for method in (n for n in cls.body
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+            decorators = {getattr(d, "id", "") for d in method.decorator_list}
+            args = method.args.posonlyargs + method.args.args
+            first_arg = args[0].arg if args else ""
+            loads_self = any(isinstance(n, ast.Name) and n.id == "self"
+                             and isinstance(n.ctx, ast.Load) for n in ast.walk(method))
+            if loads_self and first_arg != "self" and not ({"staticmethod", "classmethod"} & decorators):
+                issues.append(ContextIssue(
+                    code="method_missing_self",
+                    line=method.lineno,
+                    related_line=cls.lineno,
+                    summary=f"`{method.name}` uses `self` but cannot receive it",
+                    explanation=(
+                        "A method gets the current object through its first `self` input. "
+                        "This function uses `self`, but its definition does not accept it."
+                    ),
+                ))
+            for nested in (n for n in method.body
+                           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+                nested_args = nested.args.posonlyargs + nested.args.args
+                nested_first = nested_args[0].arg if nested_args else ""
+                nested_uses_self = any(isinstance(n, ast.Name) and n.id == "self"
+                                       for n in ast.walk(nested))
+                if nested_first == "self" or nested_uses_self:
+                    issues.append(ContextIssue(
+                        code="method_nested_inside_method",
+                        line=nested.lineno,
+                        related_line=method.lineno,
+                        summary=f"`{nested.name}` is inside `{method.name}`",
+                        explanation=(
+                            f"Because `{nested.name}` is indented inside `{method.name}`, Python "
+                            "creates it only as a local function while that outer method runs. "
+                            f"It is not a `{cls.name}` method that an object can call."
+                        ),
+                    ))
 
     def check_block(body: List[ast.stmt]) -> None:
         terminated: ast.stmt | None = None
@@ -303,7 +571,12 @@ def detect_context_issues(tree: ast.AST) -> List[ContextIssue]:
                 n.id for n in ast.walk(stmt)
                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
             }
-            for name in sorted((loads & assigned_later) - seen_assigned):
+            # A for-loop target receives its value before the loop body runs. Do not
+            # mistake a valid `for task in tasks: print(task)` for an early read.
+            bound_now = set()
+            if isinstance(stmt, (ast.For, ast.AsyncFor)):
+                bound_now = {n.id for n in ast.walk(stmt.target) if isinstance(n, ast.Name)}
+            for name in sorted((loads & assigned_later) - seen_assigned - bound_now):
                 issues.append(ContextIssue(
                     code="local_used_before_assignment",
                     line=getattr(stmt, "lineno", 1),
@@ -354,6 +627,19 @@ CONCEPT_LABELS = {
     "ml_evaluation": "model evaluation",
     "ml_cross_validation": "cross-validation",
     "ml_interpretation": "model interpretation",
+    "llm_api": "calling language-model APIs",
+    "prompt_design": "prompt and instruction design",
+    "structured_output": "validated structured model output",
+    "embeddings": "embeddings",
+    "vector_search": "vector search",
+    "rag": "retrieval-augmented generation",
+    "tool_calling": "tool calling",
+    "agents": "agent workflows",
+    "ai_evaluation": "AI evaluations",
+    "ai_safety": "AI safety controls",
+    "ai_governance": "AI governance",
+    "deployment": "application deployment",
+    "observability": "AI application observability",
 }
 
 MISCONCEPTION_LABELS = {

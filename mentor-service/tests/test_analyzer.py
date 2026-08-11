@@ -101,6 +101,50 @@ def test_function_parameter_is_not_use_before_assignment():
     assert not any(i.code == "local_used_before_assignment" for i in analyze(code).context_issues)
 
 
+def test_loop_target_is_not_use_before_assignment():
+    code = "def show(tasks):\n    for task in tasks:\n        print(task)"
+    assert not any(i.code == "local_used_before_assignment" for i in analyze(code).context_issues)
+
+
+def test_detects_methods_accidentally_nested_in_init():
+    code = """class TodoList:
+    def __init__(self):
+        self.tasks = []
+        def add_task(self, task):
+            self.tasks.append(task)
+"""
+    issue = next(i for i in analyze(code).context_issues
+                 if i.code == "method_nested_inside_method")
+    assert issue.line == 4 and issue.related_line == 2
+
+
+def test_detects_direct_method_using_self_without_parameter():
+    code = """class TodoList:
+    def print_tasks():
+        for task in self.tasks:
+            print(task)
+"""
+    assert any(i.code == "method_missing_self" for i in analyze(code).context_issues)
+
+
+def test_structural_facts_ground_loop_and_class_shape():
+    code = """class TodoList:
+    def show(self):
+        for task in self.tasks:
+            print(task)
+"""
+    facts = analyze(code).verified_facts
+    assert any("direct methods: show" in fact for fact in facts)
+    assert any("assigns: task" in fact for fact in facts)
+
+
+def test_capitalized_function_asks_intent_instead_of_assuming_class():
+    issues = analyze("def TodoList():\n    pass").context_issues
+    issue = next(i for i in issues if i.code == "function_or_class_intent")
+    assert issue.ask_intent is True
+    assert "both can be valid" in issue.explanation.lower()
+
+
 def test_print_after_loop_is_a_question_not_a_correction():
     code = "for city in cities:\n    result = city.upper()\nprint(result)"
     issue = next(i for i in analyze(code).context_issues if i.code == "print_after_loop_intent")
@@ -146,3 +190,97 @@ def test_complete_conditions_do_not_trigger_guidance():
     assert condition_guidance("if active:") is None
     assert condition_guidance("if name in allowed_names:") is None
     assert condition_guidance("while running:") is None
+
+
+def test_method_reference_compared_to_text_requires_call():
+    result = analyze('if unit.upper == "C":\n    pass')
+    issues = [i for i in result.context_issues if i.code == "method_reference_not_called"]
+    assert len(issues) == 1
+    assert "upper()" in issues[0].explanation
+
+
+def test_returning_function_called_as_statement_discards_result():
+    result = analyze("def convert(value):\n    return value * 2\nconvert(10)")
+    issues = [i for i in result.context_issues if i.code == "discarded_return_value"]
+    assert len(issues) == 1
+    assert "store or print" in issues[0].explanation.lower()
+
+
+def test_printing_returning_function_does_not_discard_result():
+    result = analyze("def convert(value):\n    return value * 2\nprint(convert(10))")
+    assert not any(i.code == "discarded_return_value" for i in result.context_issues)
+
+
+def test_mutating_function_call_is_not_mislabeled_as_discarded_result():
+    code = "tasks = []\ndef addtask(task):\n    tasks.append(task)\n    return tasks\naddtask('grocery')"
+    result = analyze(code)
+    assert not any(i.code == "discarded_return_value" for i in result.context_issues)
+
+
+def test_menu_input_before_loop_is_detected():
+    code = '''choice = input("Choice: ")
+while True:
+    if choice == "3":
+        break'''
+    issue = next(i for i in analyze(code).context_issues if i.code == "input_outside_loop")
+    assert issue.line == 1
+    assert "inside the loop" in issue.explanation
+
+
+def test_input_refreshed_inside_loop_is_not_flagged():
+    code = '''choice = input("Choice: ")
+while True:
+    choice = input("Choice: ")
+    if choice == "3":
+        break'''
+    assert not any(i.code == "input_outside_loop" for i in analyze(code).context_issues)
+
+
+def test_question_string_passed_as_task_is_detected():
+    code = '''tasks = []
+def addtask(task):
+    tasks.append(task)
+taskname = "What task would you like to add?"
+addtask(taskname)'''
+    issue = next(i for i in analyze(code).context_issues if i.code == "prompt_string_used_as_value")
+    assert "input" in issue.explanation
+
+
+def test_collection_method_on_function_is_detected():
+    result = analyze("tasks = []\ndef addtask(task):\n    tasks.append(task)\naddtask.append(task)")
+    issue = next(i for i in result.context_issues if i.code == "collection_method_on_function")
+    assert issue.line == 4
+    assert "function, not a collection" in issue.summary
+
+
+def test_returning_function_object_is_explained():
+    result = analyze("def addtask(task):\n    return addtask")
+    assert any(i.code == "returns_function_object" for i in result.context_issues)
+
+
+def test_menu_function_compared_without_call_is_detected():
+    code = 'def showoptions():\n    return input("Choice: ")\nwhile showoptions != "3":\n    pass'
+    result = analyze(code)
+    assert any(i.code == "function_compared_without_call" for i in result.context_issues)
+
+
+def test_repeated_input_helper_calls_in_conditions_are_detected():
+    code = '''
+def showoptions():
+    return input("Choice: ")
+while True:
+    if showoptions() == "1":
+        pass
+    elif showoptions() == "2":
+        pass
+'''
+    result = analyze(code)
+    issue = next(i for i in result.context_issues
+                 if i.code == "repeated_input_function_in_conditions")
+    assert "store one result" in issue.explanation
+
+
+def test_return_inside_function_does_not_make_top_level_code_unreachable():
+    code = 'def showoptions():\n    return input("Choice: ")\nwhile True:\n    choice = showoptions()\n    break'
+    result = analyze(code)
+    assert not any(i.code == "unreachable_statement" for i in result.context_issues)

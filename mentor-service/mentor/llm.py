@@ -40,10 +40,11 @@ class LLMClient:
         model = model or self.config.model
         provider = provider_for(model)
         key, base_url = self.config.creds_for(provider)
-        if not key:
+        if not key and not (provider == "openai" and self.config.local_openai):
             raise LLMError(
                 f"Model '{model}' needs the {provider} provider, but no {provider} "
-                f"API key is configured. Add it to .env, or pick a different model.",
+                f"API key is configured. Add it to .env, use a local Ollama endpoint, "
+                f"or pick a different model.",
                 retryable=False)
 
         if provider == "anthropic":
@@ -179,7 +180,7 @@ class LLMClient:
             headers = {"x-api-key": key, "anthropic-version": ANTHROPIC_VERSION}
         else:
             url = f"{base_url}/models"
-            headers = {"Authorization": f"Bearer {key}"}
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
         req = urllib.request.Request(url=url, method="GET", headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=self.config.request_timeout) as resp:
@@ -194,14 +195,14 @@ class LLMClient:
             raise LLMError(f"Unexpected /models response: {e}") from e
 
     def _post_chat(self, base_url: str, key: str, params: Dict) -> str:
+        headers = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(
             url=f"{base_url}/chat/completions",
             data=json.dumps(params).encode("utf-8"),
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {key}",
-            },
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(req, timeout=self.config.request_timeout) as resp:

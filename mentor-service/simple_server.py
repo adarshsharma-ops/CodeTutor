@@ -60,7 +60,8 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             self._send(200, {"status": "ok", "llm_mode": CONFIG.mode,
                              "model": CONFIG.model, "providers": CONFIG.available_providers(),
-                             "server": "stdlib"})
+                             "server": "stdlib", "local_model": CONFIG.local_openai,
+                             "tutoring_quality": "experimental" if CONFIG.local_openai else "provider-dependent"})
         elif parsed.path == "/models":
             try:
                 available = LLM.list_models()

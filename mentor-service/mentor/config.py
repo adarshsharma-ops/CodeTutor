@@ -25,6 +25,7 @@ Auto-detection: an Anthropic key wins; else an OpenAI key; else offline.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 from dataclasses import dataclass
 
 
@@ -59,6 +60,19 @@ _DEFAULT_MODEL = {"anthropic": "claude-sonnet-5", "openai": "gpt-4o-mini"}
 _DEFAULT_FAST = {"anthropic": "claude-haiku-4-5-20251001", "openai": ""}
 
 
+def is_local_openai_endpoint(base_url: str) -> bool:
+    """Return True only for loopback OpenAI-compatible endpoints.
+
+    Ollama does not require an API key. Restricting keyless operation to loopback
+    avoids accidentally treating an unauthenticated remote gateway as trusted.
+    """
+    try:
+        host = (urlparse(base_url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 def provider_for(model: str) -> str:
     """Which provider serves a given model, inferred from its name."""
     return "anthropic" if model.strip().lower().startswith("claude") else "openai"
@@ -81,21 +95,36 @@ class Config:
     failover: bool = True       # auto-retry on the other provider if the primary fails
     fallback_model: str = ""    # other-provider strong model to fall back to
     fallback_fast: str = ""     # other-provider fast model to fall back to
+    llm_mode: str = ""          # explicit provider restriction; blank means auto-detect
 
     @property
     def offline(self) -> bool:
-        return not (self.openai_key or self.anthropic_key)
+        return self.llm_mode == "offline" or not (
+            self.anthropic_key or self.openai_key or self.local_openai
+        )
+
+    @property
+    def local_openai(self) -> bool:
+        # A leftover Ollama URL must not make an explicitly selected Anthropic session
+        # look local or bypass Claude tutoring.
+        return self.llm_mode not in {"offline", "anthropic"} \
+            and is_local_openai_endpoint(self.openai_base_url)
 
     def available_providers(self) -> list[str]:
         p = []
-        if self.anthropic_key:
+        if self.llm_mode != "openai" and self.anthropic_key:
             p.append("anthropic")
-        if self.openai_key:
+        if self.llm_mode != "anthropic" and (self.openai_key or self.local_openai):
             p.append("openai")
         return p
 
     def has_provider(self, provider: str) -> bool:
-        return bool(self.anthropic_key if provider == "anthropic" else self.openai_key)
+        if self.llm_mode == "offline" or (
+            self.llm_mode in {"anthropic", "openai"} and provider != self.llm_mode
+        ):
+            return False
+        return bool(self.anthropic_key if provider == "anthropic"
+                    else self.openai_key or self.local_openai)
 
     def creds_for(self, provider: str) -> tuple[str, str]:
         """Return (api_key, base_url) for a provider."""
@@ -108,6 +137,8 @@ class Config:
         """Human-readable summary for logs/health (not used for routing)."""
         if self.offline:
             return "offline"
+        if self.local_openai and not self.openai_key and not self.anthropic_key:
+            return "local-ollama-experimental"
         return "+".join(self.available_providers())
 
     def _chain(self, primary: str, fallback: str) -> list[str]:
@@ -129,6 +160,9 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         _load_dotenv()
+        llm_mode = os.getenv("MENTOR_LLM_MODE", "").strip().lower()
+        if llm_mode not in {"", "anthropic", "openai", "offline"}:
+            raise ValueError("MENTOR_LLM_MODE must be anthropic, openai, offline, or blank")
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         openai_key = os.getenv("OPENAI_API_KEY", "").strip()
 
@@ -165,4 +199,5 @@ class Config:
             not in ("0", "false", "no", ""),
             fallback_model=fallback_model,
             fallback_fast=fallback_fast,
+            llm_mode=llm_mode,
         )

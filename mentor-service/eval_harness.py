@@ -33,6 +33,8 @@ from mentor.config import Config
 from mentor.llm import LLMClient
 from mentor.learner_model import LearnerModel
 from mentor.mentor import Mentor
+from mentor.analyzer import analyze
+from mentor.reliability import response_is_grounded
 from mentor.state import Session, SessionStore
 
 WEATHER = "Build a small weather app that fetches the temperature for a city"
@@ -94,6 +96,18 @@ SCENARIOS: List[Scenario] = [
     ("Runtime failure — local value read before assignment", [
         ("completed", "def total_price():\n    print(total)\n    total = 0\n    return total", {}),
     ]),
+    ("Recording regression — do not force class architecture", [
+        ("completed", "def TodoList():\n    pass", {}),
+    ]),
+    ("Recording regression — methods nested inside __init__", [
+        ("completed", "class TodoList:\n    def __init__(self):\n        self.tasks = []\n        def add_task(self, task):\n            self.tasks.append(task)", {}),
+    ]),
+    ("Recording regression — valid loop variable is not undefined", [
+        ("completed", "class TodoList:\n    def print_tasks(self):\n        for task in self.tasks:\n            print(task)", {}),
+    ]),
+    ("Recording regression — method using self must receive self", [
+        ("completed", "class TodoList:\n    def print_tasks():\n        for task in self.tasks:\n            print(task)", {}),
+    ]),
 ]
 
 
@@ -123,6 +137,7 @@ def main() -> None:
     store = SessionStore()
 
     out: List[str] = []
+    quality_failures: List[str] = []
     def emit(s: str = "") -> None:
         print(s)
         out.append(s)
@@ -148,6 +163,11 @@ def main() -> None:
                  + (f"  (line {kw.get('line')})" if kw.get("line") else ""))
             if msg:
                 emit(f"> {msg.text}")
+                automatic = behavior in {"completed", "error", "stuck"}
+                if not response_is_grounded(msg.text, analyze(code), automatic=automatic):
+                    quality_failures.append(f"{title}: ungrounded or over-revealing response")
+                if automatic and len(msg.text) > 850:
+                    quality_failures.append(f"{title}: automatic response is too long")
                 if msg.curiosity:
                     emit(f">\n> _curiosity:_ {msg.curiosity}")
             else:
@@ -160,6 +180,13 @@ def main() -> None:
     emit(f"- **Practicing:** {', '.join(p.practiced) or '—'}")
     emit(f"- **Struggling:** {', '.join(p.struggling) or '—'}")
     emit(f"- **Recurring misconceptions:** {', '.join(p.recurring_misconceptions) or '—'}")
+    emit("\n## Automated reliability gate\n")
+    if quality_failures:
+        emit("**FAIL**")
+        for finding in quality_failures:
+            emit(f"- {finding}")
+    else:
+        emit("**PASS** — no parser contradiction, early solution dump, or excessive automatic response was detected.")
 
     if args.out:
         with open(args.out, "w") as f:
