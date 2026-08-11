@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "publisher": "codetutor",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.93.0"
   },
   "categories": ["Education", "Other"],
   "activationEvents": ["onStartupFinished", "onLanguage:python"],
@@ -140,7 +140,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.93.0",
     "typescript": "^5.4.0"
   }
 }

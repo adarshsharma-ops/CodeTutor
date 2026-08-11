@@ -3,6 +3,17 @@
 All notable changes will be recorded here. The project follows semantic versioning once
 public releases begin.
 
+## Unreleased
+
+- Made Current Guidance the dominant panel area and moved earlier guidance into a
+  collapsed, independently scrollable history drawer with a constrained resize handle.
+- Removed the hidden blank-file requirement: new journeys can create their own Python
+  lesson file, attach to the current file, or reopen a saved lesson file.
+- Added a webview readiness handshake so initial pathway, blueprint, and guidance events
+  cannot be lost while the lesson editor is opening.
+- Added supported Python-run observation and a prominent one-click deterministic
+  verification flow; completed lessons now expose Next lesson inside Current Guidance.
+
 ## [0.2.0] - 2026-08-11
 
 ### Added

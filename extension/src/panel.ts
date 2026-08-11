@@ -13,6 +13,8 @@ export class MentorPanel {
   private readonly panel: vscode.WebviewPanel;
   private onAsk?: (text: string) => void;
   private onAction?: (action: string) => void;
+  private ready = false;
+  private pending: unknown[] = [];
 
   static show(context: vscode.ExtensionContext, onAsk: (text: string) => void,
               onAction?: (action: string) => void): MentorPanel {
@@ -40,7 +42,11 @@ export class MentorPanel {
     this.onAction = onAction;
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => {
-      if (m?.type === "ask" && typeof m.text === "string" && m.text.trim() && this.onAsk) {
+      if (m?.type === "ready") {
+        this.ready = true;
+        for (const message of this.pending) void this.panel.webview.postMessage(message);
+        this.pending = [];
+      } else if (m?.type === "ask" && typeof m.text === "string" && m.text.trim() && this.onAsk) {
         this.onAsk(m.text.trim());
       } else if (m?.type === "action" && typeof m.action === "string" && this.onAction) {
         this.onAction(m.action);
@@ -49,36 +55,45 @@ export class MentorPanel {
   }
 
   // --- extension -> webview --------------------------------------------
+  private post(message: unknown): void {
+    if (this.ready) void this.panel.webview.postMessage(message);
+    else this.pending.push(message);
+  }
+
   push(msg: MentorMessage): void {
-    this.panel.webview.postMessage({ type: "mentor", msg });
+    this.post({ type: "mentor", msg });
   }
 
   coach(msg: MentorMessage): void {
-    this.panel.webview.postMessage({ type: "coach", msg });
+    this.post({ type: "coach", msg });
   }
 
   resetGuidance(): void {
-    this.panel.webview.postMessage({ type: "resetGuidance" });
+    this.post({ type: "resetGuidance" });
   }
 
   setBlueprint(steps: string[]): void {
-    this.panel.webview.postMessage({ type: "blueprint", steps });
+    this.post({ type: "blueprint", steps });
   }
 
   setLessonProgress(currentStep: number, completedSteps: number[]): void {
-    this.panel.webview.postMessage({ type: "lessonProgress", currentStep, completedSteps });
+    this.post({ type: "lessonProgress", currentStep, completedSteps });
   }
 
   showLessonCheck(checks: LessonCheck[], passed: boolean, next?: {module_title: string; goal: string}): void {
-    this.panel.webview.postMessage({ type: "lessonCheck", checks, passed, next });
+    this.post({ type: "lessonCheck", checks, passed, next });
+  }
+
+  showReadyToRun(observed = false): void {
+    this.post({ type: observed ? "runSucceeded" : "readyToRun" });
   }
 
   setPath(levels: LevelProgress[], currentLevel: string): void {
-    this.panel.webview.postMessage({ type: "path", levels, currentLevel });
+    this.post({ type: "path", levels, currentLevel });
   }
 
   thinking(on: boolean): void {
-    this.panel.webview.postMessage({ type: "thinking", on });
+    this.post({ type: "thinking", on });
   }
 
   private html(): string {
@@ -89,7 +104,7 @@ export class MentorPanel {
   body { margin: 0; font-family: var(--vscode-font-family); color: var(--vscode-foreground);
          display: flex; flex-direction: column; height: 100vh; overflow:hidden; }
   header { padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border);
-           flex:0 1 44vh; overflow-y:auto; min-height:110px; }
+           flex:0 1 30vh; max-height:30vh; overflow-y:auto; min-height:90px; }
   header h3 { margin: 0 0 6px; font-size: 13px; }
   details { margin-top: 6px; } summary { cursor: pointer; font-size: 12px; opacity: .85; }
   ol { margin: 6px 0; padding-left: 18px; line-height: 1.5; font-size: 12px; }
@@ -102,15 +117,45 @@ export class MentorPanel {
   .action.primary { background:var(--vscode-button-background); color:var(--vscode-button-foreground); }
   .check { font-size:12px; padding:2px 0; }
 
-  #feed { flex:1 1 auto; min-height:150px; overflow-y:auto; overscroll-behavior:contain;
-          padding:12px; display:flex; flex-direction:column; gap:10px; scrollbar-gutter:stable; }
+  #guidance-layout { flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
+                     --history-size:25%; }
   #current-guidance { padding:8px 12px; border-bottom:1px solid var(--vscode-panel-border);
-                      flex:0 1 27vh; overflow-y:auto; min-height:0; scrollbar-gutter:stable; }
+                      flex:1 1 auto; overflow-y:auto; min-height:180px; scrollbar-gutter:stable; }
   #current-guidance:empty { display:none; }
   #current-guidance .guidance-title { font-size:10.5px; opacity:.7; margin-bottom:5px;
                                      text-transform:uppercase; letter-spacing:.04em; }
   #current-guidance .bubble { max-width:100%; border-left:3px solid var(--vscode-textLink-foreground);
                               background:var(--vscode-editor-inactiveSelectionBackground); }
+  #history { margin:0; border-top:1px solid var(--vscode-panel-border); flex:0 0 34px;
+             min-height:34px; overflow:hidden; display:flex; flex-direction:column; }
+  #history:not(.collapsed) { flex:0 0 var(--history-size);
+                             max-height:calc((100% - 7px) / 3); min-height:96px; }
+  #history-toggle { flex:0 0 34px; width:100%; padding:8px 12px; margin:0; border:0;
+                    cursor:pointer; text-align:left; font-family:inherit; font-size:11px;
+                    font-weight:600; text-transform:uppercase; letter-spacing:.04em;
+                    color:var(--vscode-foreground);
+                    background:var(--vscode-sideBarSectionHeader-background); }
+  #history-toggle:hover { background:var(--vscode-list-hoverBackground); }
+  #history-toggle::before { content:'▸'; display:inline-block; width:14px; }
+  #history:not(.collapsed) #history-toggle::before { content:'▾'; }
+  #history-count { opacity:.65; font-weight:400; }
+  #history-splitter { display:none; flex:0 0 7px; cursor:row-resize; position:relative;
+                      background:var(--vscode-panel-border); touch-action:none; }
+  #history-splitter::after { content:''; position:absolute; left:calc(50% - 18px); top:2px;
+                             width:36px; height:3px; border-radius:2px;
+                             background:var(--vscode-descriptionForeground); opacity:.55; }
+  #guidance-layout.history-open #history-splitter { display:block; }
+  #history-splitter:hover, #history-splitter.dragging { background:var(--vscode-focusBorder); }
+  #feed { flex:1 1 auto; min-height:0; overflow-y:scroll; overscroll-behavior:contain;
+          padding:10px 12px; display:flex; flex-direction:column; gap:10px;
+          scrollbar-gutter:stable; touch-action:pan-y; }
+  #history.collapsed #feed { display:none; }
+  #feed::-webkit-scrollbar { width:10px; }
+  #feed::-webkit-scrollbar-track { background:var(--vscode-scrollbarSlider-background); }
+  #feed::-webkit-scrollbar-thumb { background:var(--vscode-scrollbarSlider-hoverBackground);
+                                   border-radius:6px; border:2px solid transparent;
+                                   background-clip:padding-box; }
+  .guidance-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
   .row { display: flex; }
   .row.user { justify-content: flex-end; }
   .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; line-height: 1.45;
@@ -148,8 +193,17 @@ export class MentorPanel {
     <details open><summary>Blueprint</summary><div id="blueprint"><span style="opacity:.6;font-size:12px">Set a goal to see the plan.</span></div></details>
     <div id="lesson-actions"><button class="action" data-action="check">Run lesson check</button></div>
   </header>
-  <section id="current-guidance"></section>
-  <div id="feed"><div class="empty">Start coding — hints appear here. Ask me anything below.</div></div>
+  <main id="guidance-layout">
+    <section id="current-guidance"></section>
+    <div id="history-splitter" role="separator" aria-label="Resize previous guidance"
+         aria-orientation="horizontal" tabindex="0"></div>
+    <section id="history" class="collapsed" aria-label="Previous guidance and conversation">
+      <button id="history-toggle" type="button" aria-expanded="false">
+        Previous guidance &amp; conversation <span id="history-count"></span>
+      </button>
+      <div id="feed"><div class="empty">Earlier guidance and questions will appear here.</div></div>
+    </section>
+  </main>
   <div id="typing"></div>
   <footer>
     <textarea id="q" rows="1" placeholder="Ask the mentor… (Enter to send)"></textarea>
@@ -158,7 +212,12 @@ export class MentorPanel {
 <script>
   const vscode = acquireVsCodeApi();
   const feed = document.getElementById('feed');
+  const guidanceLayout = document.getElementById('guidance-layout');
   const guidance = document.getElementById('current-guidance');
+  const historyPanel = document.getElementById('history');
+  const historyToggle = document.getElementById('history-toggle');
+  const historySplitter = document.getElementById('history-splitter');
+  const historyCount = document.getElementById('history-count');
   const typing = document.getElementById('typing');
   const q = document.getElementById('q');
   const icons = { blueprint:'🗺️', next_step:'➡️', error:'⚠️', context_correction:'🧭', context_question:'🤔', understanding_check:'🧠', stuck:'💭', explain:'💡', why:'❓', answer:'💬' };
@@ -179,6 +238,10 @@ export class MentorPanel {
   }
 
   function clearEmpty() { const e = feed.querySelector('.empty'); if (e) e.remove(); }
+  function updateHistoryCount() {
+    const count = feed.querySelectorAll('.row').length;
+    historyCount.textContent = count ? '(' + count + ')' : '';
+  }
   function atBottom() { return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60; }
   function scroll() { feed.scrollTop = feed.scrollHeight; }
   function now() { return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
@@ -200,8 +263,80 @@ export class MentorPanel {
       b.appendChild(c);
     }
     row.appendChild(b); if (!row.parentNode) host.appendChild(row);
-    if (host === feed && (stick || role === 'user')) scroll();
+    if (host === feed) {
+      updateHistoryCount();
+      if (stick || role === 'user') scroll();
+    }
   }
+
+  function showCurrent(m, label) {
+    if (activeCoach) {
+      const oldVia = activeCoach.via && activeCoach.via !== 'offline' ? '  · via ' + activeCoach.via : '';
+      const oldLabel = (icons[activeCoach.kind]||'•') + ' previous guidance' +
+        (activeCoach.line ? '  · line '+activeCoach.line : '') + oldVia;
+      addBubble('mentor', activeCoach.kind, activeCoach.text,
+        oldLabel + '  · ' + activeCoach.time, activeCoach.curiosity);
+    }
+    activeCoach = Object.assign({}, m, {time: now()});
+    guidance.replaceChildren();
+    const title = document.createElement('div'); title.className='guidance-title'; title.textContent='Current guidance';
+    guidance.appendChild(title);
+    addBubble('mentor', m.kind, m.text, label + '  · ' + activeCoach.time,
+      m.curiosity, 'active-coach', guidance);
+    guidance.scrollTop = 0;
+  }
+
+  function addGuidanceAction(label, action, primary) {
+    let actions = guidance.querySelector('.guidance-actions');
+    if (!actions) {
+      actions = document.createElement('div'); actions.className='guidance-actions';
+      guidance.appendChild(actions);
+    }
+    const button = document.createElement('button');
+    button.className='action' + (primary ? ' primary' : '');
+    button.textContent=label;
+    button.addEventListener('click', () => vscode.postMessage({type:'action', action}));
+    actions.appendChild(button);
+  }
+
+  function setHistorySize(clientY) {
+    const rect = guidanceLayout.getBoundingClientRect();
+    const min = Math.min(96, rect.height * .25);
+    const max = (rect.height - historySplitter.getBoundingClientRect().height) / 3;
+    const desired = Math.max(min, Math.min(max, rect.bottom - clientY));
+    guidanceLayout.style.setProperty('--history-size', desired + 'px');
+  }
+
+  function setHistoryOpen(open) {
+    historyPanel.classList.toggle('collapsed', !open);
+    guidanceLayout.classList.toggle('history-open', open);
+    historyToggle.setAttribute('aria-expanded', String(open));
+    if (open) requestAnimationFrame(scroll);
+  }
+  historyToggle.addEventListener('click', () => {
+    setHistoryOpen(historyPanel.classList.contains('collapsed'));
+  });
+  historySplitter.addEventListener('pointerdown', e => {
+    historySplitter.classList.add('dragging');
+    historySplitter.setPointerCapture(e.pointerId);
+    setHistorySize(e.clientY);
+  });
+  historySplitter.addEventListener('pointermove', e => {
+    if (historySplitter.hasPointerCapture(e.pointerId)) setHistorySize(e.clientY);
+  });
+  historySplitter.addEventListener('pointerup', e => {
+    if (historySplitter.hasPointerCapture(e.pointerId)) historySplitter.releasePointerCapture(e.pointerId);
+    historySplitter.classList.remove('dragging');
+  });
+  historySplitter.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    const current = historyPanel.getBoundingClientRect().height;
+    const rect = guidanceLayout.getBoundingClientRect();
+    const target = current + (e.key === 'ArrowUp' ? 20 : -20);
+    const clientY = rect.bottom - target;
+    setHistorySize(clientY);
+  });
 
   function renderMessage(container, text) {
     // Render fenced code without allowing model text to become HTML. Everything is
@@ -228,36 +363,34 @@ export class MentorPanel {
       typing.textContent = '';
       const viaTag = m.via && m.via !== 'offline' ? '  · via ' + m.via : '';
       const label = (icons[m.kind]||'•') + ' ' + (m.kind||'').replace('_',' ') + (m.line ? '  · line '+m.line : '') + viaTag;
-      addBubble('mentor', m.kind, m.text, label + '  · ' + now(), m.curiosity);
+      showCurrent(m, label);
     } else if (d.type === 'coach') {
       const m = d.msg;
       typing.textContent = '';
       const viaTag = m.via && m.via !== 'offline' ? '  · via ' + m.via : '';
       const label = (icons[m.kind]||'•') + ' current guidance' + (m.line ? '  · line '+m.line : '') + viaTag;
-      if (activeCoach) {
-        const oldVia = activeCoach.via && activeCoach.via !== 'offline' ? '  · via ' + activeCoach.via : '';
-        const oldLabel = (icons[activeCoach.kind]||'•') + ' previous guidance' +
-          (activeCoach.line ? '  · line '+activeCoach.line : '') + oldVia;
-        addBubble('mentor', activeCoach.kind, activeCoach.text, oldLabel + '  · ' + activeCoach.time, activeCoach.curiosity);
-      }
-      activeCoach = Object.assign({}, m, {time: now()});
-      guidance.replaceChildren();
-      const title = document.createElement('div'); title.className='guidance-title'; title.textContent='Current guidance';
-      guidance.appendChild(title);
-      addBubble('mentor', m.kind, m.text, label + '  · ' + activeCoach.time, m.curiosity, 'active-coach', guidance);
+      showCurrent(m, label);
     } else if (d.type === 'resetGuidance') {
-      activeCoach = null; guidance.replaceChildren();
+      activeCoach = null;
+      guidance.replaceChildren();
+      feed.replaceChildren();
+      const empty = document.createElement('div'); empty.className='empty';
+      empty.textContent='Earlier guidance and questions will appear here.';
+      feed.appendChild(empty);
+      setHistoryOpen(false);
+      updateHistoryCount();
     } else if (d.type === 'blueprint') {
       blueprintSteps = d.steps || []; renderBlueprint();
     } else if (d.type === 'lessonProgress') {
       currentStep = d.currentStep || 0; completedSteps = d.completedSteps || []; renderBlueprint();
     } else if (d.type === 'lessonCheck') {
-      clearEmpty(); const row = document.createElement('div'); row.className='row mentor';
-      const b = document.createElement('div'); b.className='bubble ' + (d.passed ? 'next_step' : '');
-      const title = document.createElement('strong'); title.textContent = d.passed ? 'Lesson complete' : 'Lesson check'; b.appendChild(title);
-      (d.checks||[]).forEach(c => { const x=document.createElement('div'); x.className='check'; x.textContent=(c.passed?'✓ ':'○ ')+c.label; b.appendChild(x); });
-      if (d.passed && d.next) { const p=document.createElement('div'); p.style.marginTop='7px'; p.textContent='Up next: '+d.next.module_title+' — '+d.next.goal; b.appendChild(p); }
-      row.appendChild(b); feed.appendChild(row); scroll();
+      const lines = [d.passed ? 'Lesson complete' : 'Lesson check'];
+      (d.checks||[]).forEach(c => lines.push((c.passed?'✓ ':'○ ')+c.label));
+      if (d.passed && d.next) lines.push('Up next: '+d.next.module_title+' — '+d.next.goal);
+      showCurrent({kind:d.passed?'next_step':'answer', text:lines.join('\\n')},
+        d.passed ? '✓ verified lesson completion' : '• verified lesson check');
+      if (d.passed && d.next) addGuidanceAction('Next lesson', 'next', true);
+      else if (d.passed) addGuidanceAction('Review completed pathway', 'review', true);
       const actions=document.getElementById('lesson-actions');
       actions.innerHTML = d.passed && d.next
         ? '<button class="action primary" data-action="next">Next lesson</button><button class="action" data-action="review">Review what I learned</button>'
@@ -274,6 +407,14 @@ export class MentorPanel {
       }).join('');
     } else if (d.type === 'thinking') {
       typing.textContent = d.on ? 'CodeTutor is thinking…' : '';
+    } else if (d.type === 'readyToRun') {
+      showCurrent({kind:'next_step', text:'Your code meets this lesson’s structural requirements. Run it with a normal input and an edge case. When it behaves as expected, verify completion below.'},
+        '▶ ready to run');
+      addGuidanceAction('I ran it successfully — verify', 'confirmRun', true);
+    } else if (d.type === 'runSucceeded') {
+      showCurrent({kind:'next_step', text:'VS Code observed a successful Python command for this lesson file. Confirm that its behavior matched what you expected, then verify the lesson.'},
+        '✓ Python run finished');
+      addGuidanceAction('Verify completion & continue', 'confirmRun', true);
     }
   });
 
@@ -296,6 +437,7 @@ export class MentorPanel {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   q.addEventListener('input', () => { q.style.height = 'auto'; q.style.height = Math.min(q.scrollHeight, 120) + 'px'; });
+  vscode.postMessage({type:'ready'});
 </script>
 </body></html>`;
   }

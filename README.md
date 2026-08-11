@@ -82,7 +82,16 @@ what yes-or-no question the learner wants Python to answer.
 
 ## Demo
 
-▶️ **[Watch the 45-second demo](docs/CodeTutor-demo.mp4)**
+▶️ **[Watch the 79-second AI learning journey](docs/CodeTutor-AI-Learning-Journey.mp4)**
+
+The latest walkthrough follows the complete loop: choose a model provider and teaching
+level, enter the AI Engineer & AI Expert journey, receive a beginner-friendly blueprint,
+get guidance at the line where progress stalls, correct a logic mistake, verify the
+working program, and continue directly into the next AI lesson. Current guidance remains
+prominent while earlier explanations stay available in a separate history drawer.
+
+For a shorter look at condition coaching, see the original
+**[45-second in-editor demo](docs/CodeTutor-demo.mp4)**.
 
 ### Guidance that explains, not just corrects
 
@@ -336,8 +345,9 @@ npm run compile
 ```
 
 Then open the `extension` folder in VS Code and press **F5** to launch an Extension
-Development Host. In that window, open a `.py` file and run
-**“CodeTutor: Start a mentored session”** from the Command Palette.
+Development Host (VS Code 1.93 or newer). Run **CodeTutor: Start a new learning journey**
+from the Command Palette; CodeTutor offers to create the Python lesson file or use the
+current one.
 
 ## Repository layout
 
@@ -368,8 +378,14 @@ CodeTutor/
 
 ## Status
 
-This is a working **prototype** of the full loop. The brain runs and is verified end-to-end
-in offline mode; the extension compiles and wires all four triggers. Next steps are in
+This is a working **open-source prototype** of the full learning loop: provider onboarding,
+level- and pathway-aware projects, proactive in-editor guidance, persistent lesson state,
+deterministic lesson verification, and progression into the next project. The mentor
+service is covered by hermetic tests and the VS Code extension compiles from source.
+
+It is not yet a validated educational assessment or a packaged Marketplace extension.
+Teaching quality still depends on the configured model, and local models should be judged
+with the included evaluation harness before relying on them. Next steps are in
 ARCHITECTURE.md.
 
 ## Privacy and security

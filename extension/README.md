@@ -9,7 +9,9 @@ intelligence lives in the Python mentor service (`../mentor-service`).
 - **Idle timer** (~10s, resets on every keystroke, de-duplicates) → "stuck" nudge.
 - **Hover provider** → "why is this line here?" reasoning.
 - **Inline CodeLens hints** → a short action above the line that triggered the response.
-- **Webview side panel** → the blueprint plus a short feed of mentor messages.
+- **Webview side panel** → dominant current guidance plus resizable, scrollable history.
+- **Run completion** → observes supported terminal runs and offers deterministic lesson
+  verification; successful verification exposes the next lesson.
 - **Curiosity prompt** → an info message with Yes/No when you first use a new symbol.
 
 ## Build & run
@@ -19,10 +21,13 @@ npm install
 npm run compile      # or: npm run watch
 ```
 
+Use VS Code 1.93 or newer so terminal shell integration can observe supported Python runs.
+
 1. Start the Python service first (`../mentor-service/run_server.sh`).
 2. Open this `extension` folder in VS Code and press **F5** (Extension Development Host).
-3. In the dev window, open a `.py` file.
-4. Command Palette → **“CodeTutor: Start a mentored session”**, type your goal.
+3. Command Palette → **CodeTutor: Start a new learning journey**. CodeTutor can open a
+   new Python lesson file for you, or attach to one that is already open.
+4. Choose the teaching level, learning path, and project.
 5. Start coding. Hints appear inline and in the side panel.
 
 ## Line actions

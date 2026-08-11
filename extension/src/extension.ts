@@ -185,6 +185,7 @@ export function activate(context: vscode.ExtensionContext) {
         maybeAutoStart();
       }
     }),
+    vscode.window.onDidEndTerminalShellExecution(handleTerminalRun),
     vscode.languages.registerHoverProvider("python", { provideHover }),
     vscode.languages.registerCodeActionsProvider("python", new TutorCodeActions(), {
       providedCodeActionKinds: [vscode.CodeActionKind.QuickFix],
@@ -316,12 +317,16 @@ function maybeAutoStart() {
 async function initializeOnLaunch(context: vscode.ExtensionContext): Promise<void> {
   if (starting) return;
   starting = true;
+  let providerConfiguredNow = false;
   try {
     if (!(await ensureConsent())) return;
     const onboardingDone = extContext.globalState.get<boolean>(
       "codetutor.providerOnboardingComplete", false
     );
-    if (!onboardingDone && !(await setupProvider(false))) return;
+    if (!onboardingDone) {
+      if (!(await setupProvider(false))) return;
+      providerConfiguredNow = true;
+    }
   } catch (err) {
     console.error("CodeTutor launch setup failed:", err);
     vscode.window.showErrorMessage(friendlyError(err));
@@ -333,6 +338,10 @@ async function initializeOnLaunch(context: vscode.ExtensionContext): Promise<voi
   const active = vscode.window.activeTextEditor?.document;
   if (active?.languageId === "python") {
     lastPyDoc = active;
+    maybeAutoStart();
+  } else if (providerConfiguredNow) {
+    // First-run onboarding should flow directly into lesson choice. The learner should
+    // not have to discover that creating a blank Python file is an undocumented trigger.
     maybeAutoStart();
   }
 }
@@ -595,10 +604,8 @@ async function attachSession(context: vscode.ExtensionContext, res: SessionRespo
     ? `Welcome back. Continuing in ${learnerLevel} mode at your saved step.`
     : `Teaching mode: ${learnerLevel}. Here's the plan we'll build toward.` });
 
-  const existing = currentCode();
-  const pyEditor = vscode.window.activeTextEditor?.document.languageId === "python"
-    ? vscode.window.activeTextEditor
-    : vscode.window.visibleTextEditors.find((e) => e.document.languageId === "python");
+  const pyEditor = await ensureLessonEditor(res, resumed);
+  const existing = pyEditor.document.getText();
   if (pyEditor) lastPyDoc = pyEditor.document;
   if (pyEditor && existing.split("\n").filter((l) => l.trim()).length >= 2) {
     lastHintedCode = existing; lastHintAt = Date.now();
@@ -609,13 +616,59 @@ async function attachSession(context: vscode.ExtensionContext, res: SessionRespo
   }
 }
 
+async function ensureLessonEditor(
+  res: SessionResponse | ResumeResponse,
+  resumed: boolean,
+): Promise<vscode.TextEditor> {
+  let editor = vscode.window.activeTextEditor?.document.languageId === "python"
+    ? vscode.window.activeTextEditor
+    : vscode.window.visibleTextEditors.find((candidate) => candidate.document.languageId === "python");
+
+  if (resumed && "file_uri" in res && res.file_uri) {
+    try {
+      const saved = await vscode.workspace.openTextDocument(vscode.Uri.parse(res.file_uri));
+      if (saved.languageId === "python") {
+        editor = await vscode.window.showTextDocument(saved, {
+          viewColumn: vscode.ViewColumn.One, preview: false,
+        });
+      }
+    } catch { /* the saved file may have been moved; fall back below */ }
+  }
+
+  if (editor && !resumed) {
+    const destination = await vscode.window.showQuickPick([
+      { label: "Start in a new Python lesson file", id: "new" as const,
+        description: "Recommended — keeps this lesson separate from other work" },
+      { label: "Use the current Python file", id: "current" as const,
+        description: editor.document.fileName.split(/[\\/]/).pop() || "Current editor" },
+    ], {
+      title: "Where should CodeTutor open this lesson?",
+      ignoreFocusOut: true,
+    });
+    if (destination?.id === "new") editor = undefined;
+  }
+
+  if (!editor) {
+    const document = await vscode.workspace.openTextDocument({ language: "python", content: "" });
+    editor = await vscode.window.showTextDocument(document, {
+      viewColumn: vscode.ViewColumn.One, preview: false,
+    });
+    vscode.window.showInformationMessage(
+      "CodeTutor opened a new Python lesson file. Save it whenever you're ready."
+    );
+  }
+  lastPyDoc = editor.document;
+  return editor;
+}
+
 async function handlePanelAction(action: string) {
   if (action === "check") await checkCurrentLesson();
+  else if (action === "confirmRun") await checkCurrentLesson(true);
   else if (action === "next") await startNextLesson();
   else if (action === "review") await showProgress();
 }
 
-async function checkCurrentLesson() {
+async function checkCurrentLesson(runAlreadyConfirmed = false) {
   if (!sessionId) { vscode.window.showWarningMessage("Start or resume a CodeTutor lesson first."); return; }
   // Completion is a whole-program claim. Never apply the privacy-oriented
   // function-only scope here or valid project behavior outside that function vanishes.
@@ -623,19 +676,33 @@ async function checkCurrentLesson() {
     ? vscode.window.activeTextEditor.document : lastPyDoc;
   const code = doc && !sendingBlocked(doc) ? doc.getText() : "";
   if (!code.trim()) { vscode.window.showWarningMessage("Add some Python code before running the lesson check."); return; }
-  const run = await vscode.window.showQuickPick([
-    { label: "Yes — I ran it successfully", value: true,
-      detail: "The program completed the behavior I expected without an unhandled error." },
-    { label: "Not yet", value: false, detail: "Check the code structure and show what remains." },
-  ], { title: "Did you run and exercise the program?", ignoreFocusOut: true });
-  if (!run) return;
+  let runPassed = runAlreadyConfirmed;
+  if (!runAlreadyConfirmed) {
+    const run = await vscode.window.showQuickPick([
+      { label: "Yes — I ran it successfully", value: true,
+        detail: "The program completed the behavior I expected without an unhandled error." },
+      { label: "Not yet", value: false, detail: "Check the code structure and show what remains." },
+    ], { title: "Did you run and exercise the program?", ignoreFocusOut: true });
+    if (!run) return;
+    runPassed = run.value;
+  }
   try {
     const uri = vscode.window.activeTextEditor?.document.uri.toString() || lastPyDoc?.uri.toString() || "";
-    const result = await client.checkLesson(sessionId, code, run.value, uri);
+    const result = await client.checkLesson(sessionId, code, runPassed, uri);
     nextLesson = result.next;
     panel?.showLessonCheck(result.checks, result.passed, result.next);
     if (result.passed) vscode.window.showInformationMessage("Lesson complete. Choose Next lesson when you're ready.");
   } catch (err) { vscode.window.showErrorMessage(friendlyError(err)); }
+}
+
+async function handleTerminalRun(event: vscode.TerminalShellExecutionEndEvent) {
+  if (!sessionId || event.exitCode !== 0 || !lastPyDoc || lastPyDoc.isUntitled) return;
+  if (!readinessPrompted || lastPyDoc.getText() !== lastReadyCode) return;
+  const command = event.execution.commandLine.value;
+  const basename = path.basename(lastPyDoc.fileName);
+  const invokesPython = /(^|[\s/])(python(?:3(?:\.\d+)?)?|py)(?=\s|$)/i.test(command);
+  if (!invokesPython || !command.includes(basename)) return;
+  panel?.showReadyToRun(true);
 }
 
 async function startNextLesson() {
@@ -763,6 +830,7 @@ function onEdit(e: vscode.TextDocumentChangeEvent) {
   if (e.document.languageId !== "python") return;
   if (!outboundAllowed(e.document)) return;
   lastPyDoc = e.document;
+  if (lastReadyCode && e.document.getText() !== lastReadyCode) readinessPrompted = false;
   // First time typing in Python with no session yet -> auto-start (asks the goal once).
   if (!sessionId) {
     maybeAutoStart();
@@ -941,11 +1009,7 @@ function applyLessonMetadata(msg: MentorMessage, code: string) {
   if (failed.length === 1 && failed[0].id === "run") {
     lastReadyCode = code;
     readinessPrompted = true;
-    panel?.push({
-      kind: "next_step",
-      text: "Your code now meets the structural requirements for this lesson. Run and exercise it, then click ‘Run lesson check’ to verify completion.",
-      via: "lesson checker",
-    });
+    panel?.showReadyToRun(false);
     vscode.window.showInformationMessage(
       "CodeTutor: the lesson is ready to run. After testing it, choose Run lesson check."
     );

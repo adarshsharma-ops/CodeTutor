@@ -60,6 +60,7 @@ export interface SessionResponse {
 
 export interface ResumeResponse extends SessionResponse {
   goal: string;
+  file_uri?: string;
   current_step: number;
   completed_steps: number[];
   status: "in_progress" | "completed";
