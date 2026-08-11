@@ -286,6 +286,37 @@ retention, task completion without generated code, and behavior across skill lev
 
 ## Quick start
 
+> **New to terminals or VS Code extensions?** Follow the complete
+> **[beginner setup guide](docs/BEGINNER_SETUP.md)**. It explains every prerequisite,
+> provides separate macOS/Linux and Windows commands, shows what successful output looks
+> like, and includes fixes for the most common setup errors.
+
+CodeTutor currently runs from source rather than the VS Code Marketplace. The shortest
+macOS/Linux setup is:
+
+```bash
+cd ~/Downloads
+git clone https://github.com/adarshsharma-ops/CodeTutor.git
+cd CodeTutor/mentor-service
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp config.example.env .env
+bash run_server.sh
+```
+
+Keep that terminal open. In a second terminal:
+
+```bash
+cd ~/Downloads/CodeTutor/extension
+npm install
+npm run compile
+```
+
+Open the `CodeTutor/extension` folder through **VS Code → File → Open Folder**, then press
+**F5**. Do not open the outer repository folder, and do not rely on the optional `code`
+terminal command. The first-run screens configure OpenAI, Anthropic, or local Ollama and
+then start the learning journey.
+
 At the start of each session, choose how CodeTutor should teach:
 
 - **Beginner** leads with the concrete next action, its purpose, and plain-language help.

@@ -5,6 +5,8 @@ public releases begin.
 
 ## Unreleased
 
+- Added a beginner-first installation guide with complete macOS/Linux and Windows
+  commands, expected output, model onboarding, relaunch steps, and common fixes.
 - Made Current Guidance the dominant panel area and moved earlier guidance into a
   collapsed, independently scrollable history drawer with a constrained resize handle.
 - Removed the hidden blank-file requirement: new journeys can create their own Python

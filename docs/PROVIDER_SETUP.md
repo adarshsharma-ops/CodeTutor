@@ -4,6 +4,11 @@ CodeTutor's extension talks to the local mentor service. The mentor service then
 one of the options below. Never paste an API key into chat, source code, VS Code settings,
 an issue, or a commit.
 
+For a first installation, use the [beginner setup guide](BEGINNER_SETUP.md). The
+extension's first-run provider chooser writes the selected values to the ignored local
+`.env` file and reloads a running mentor service automatically. The manual steps below
+are useful for troubleshooting or advanced configuration.
+
 ## Option 1: Local Ollama (free, no API key)
 
 This is the easiest way to try CodeTutor without sharing a cloud key. Code and prompts
@@ -30,7 +35,8 @@ evaluation described below before recommending a local model to learners.
    MENTOR_FAILOVER=0
    ```
 
-5. Start or restart the mentor service.
+5. Start or restart the mentor service if you edited `.env` manually. The extension's
+   provider chooser reloads a running service automatically.
 6. Run `python3 check_llm.py` from `mentor-service` to verify the model.
 
 The model is downloaded to the tester's computer and may require several gigabytes of

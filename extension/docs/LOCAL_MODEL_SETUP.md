@@ -19,7 +19,8 @@ stronger explanations and reasoning.
 
 4. Return to VS Code and run **CodeTutor: Set up model provider**. Choose **No — use a
    local model**. CodeTutor will detect Ollama and the models installed on it.
-5. Restart the mentor service so it reads the updated `.env`, then start CodeTutor.
+5. If the mentor service is already running, CodeTutor reloads the new provider
+   automatically. If it is stopped, start it and then start CodeTutor again.
 
 If CodeTutor says Ollama is installed but not running, open **Ollama.app** and choose
 **Check again**. A browser showing `404` at `/v1` is not itself a failure; CodeTutor
