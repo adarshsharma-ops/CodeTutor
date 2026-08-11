@@ -17,7 +17,7 @@ intelligence lives in the Python mentor service (`../mentor-service`).
 ## Build & run
 
 If you have not run a VS Code extension from source before, start with the repository's
-**[beginner setup guide](../docs/BEGINNER_SETUP.md)**. It includes the mentor-service
+**[beginner setup guide](../BEGINNER_SETUP.md)**. It includes the mentor-service
 commands, provider selection, expected output, and troubleshooting for macOS, Linux, and
 Windows.
 

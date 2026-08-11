@@ -287,7 +287,7 @@ retention, task completion without generated code, and behavior across skill lev
 ## Quick start
 
 > **New to terminals or VS Code extensions?** Follow the complete
-> **[beginner setup guide](docs/BEGINNER_SETUP.md)**. It explains every prerequisite,
+> **[beginner setup guide](BEGINNER_SETUP.md)**. It explains every prerequisite,
 > provides separate macOS/Linux and Windows commands, shows what successful output looks
 > like, and includes fixes for the most common setup errors.
 
@@ -403,6 +403,7 @@ CodeTutor/
 ├── extension/               # VS Code extension (thin client)
 │   ├── package.json
 │   └── src/{extension,client,panel}.ts
+├── BEGINNER_SETUP.md        # first-time installation and troubleshooting
 ├── LICENSE                  # MIT
 └── ARCHITECTURE.md
 ```

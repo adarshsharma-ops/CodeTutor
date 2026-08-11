@@ -273,5 +273,5 @@ Press **Control+C** in the mentor-service terminal when you want to stop the ser
 | F5 does not launch the extension | Confirm that VS Code opened the inner `CodeTutor/extension` folder and select **Run CodeTutor Extension**. |
 | `CodeTutor couldn't complete that request` | Check `http://127.0.0.1:8756/health`, then read the mentor-service terminal and **Help → Toggle Developer Tools → Console** in the Extension Development Host. |
 
-For model-specific details, see [Provider setup](PROVIDER_SETUP.md). For expected model
-limitations and evaluation, see [Tutor reliability](TUTOR_RELIABILITY.md).
+For model-specific details, see [Provider setup](docs/PROVIDER_SETUP.md). For expected
+model limitations and evaluation, see [Tutor reliability](docs/TUTOR_RELIABILITY.md).

@@ -4,7 +4,7 @@ CodeTutor's extension talks to the local mentor service. The mentor service then
 one of the options below. Never paste an API key into chat, source code, VS Code settings,
 an issue, or a commit.
 
-For a first installation, use the [beginner setup guide](BEGINNER_SETUP.md). The
+For a first installation, use the [beginner setup guide](../BEGINNER_SETUP.md). The
 extension's first-run provider chooser writes the selected values to the ignored local
 `.env` file and reloads a running mentor service automatically. The manual steps below
 are useful for troubleshooting or advanced configuration.
