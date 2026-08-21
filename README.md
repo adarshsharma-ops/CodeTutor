@@ -4,14 +4,14 @@
 > for learner independence instead of code-generation speed.
 
 An **in-editor pair-programming mentor**. You drive the keyboard; it rides along and
-teaches in the flow of building — a *genie inside your editor*, not a standalone app
+teaches in the flow of building - a *genie inside your editor*, not a standalone app
 and not a code generator.
 
 > **Why I built this.** Most "AI for coding" tools either write the code for you or
-> lecture you about it — neither is how people actually get good. You learn by building
+> lecture you about it - neither is how people actually get good. You learn by building
 > real things with someone experienced explaining *why* over your shoulder, and getting
 > quieter as you improve. I wanted to build that: a mentor that lets you drive, explains
-> in context, and — critically — *remembers what you already know* so it stops repeating
+> in context, and - critically - *remembers what you already know* so it stops repeating
 > itself and adapts when you keep making the same mistake. The interesting engineering
 > isn't the LLM call; it's the **learner model** that decides when, what, and how much to
 > explain.
@@ -30,8 +30,8 @@ right choice. If your goal is to *get good*, this is built for you.
 
 ## How it's different from Copilot / Cursor / Claude Code
 
-Those tools optimize for **productivity** — get working code out the door, ideally written
-by the AI. CodeTutor optimizes for **learning** — *you* write every line, and the mentor
+Those tools optimize for **productivity** - get working code out the door, ideally written
+by the AI. CodeTutor optimizes for **learning** - *you* write every line, and the mentor
 teaches in the flow. Same editor, opposite goal.
 
 | | Coding assistants (Copilot, Cursor, Claude Code) | **CodeTutor** |
@@ -44,7 +44,7 @@ teaches in the flow. Same editor, opposite goal.
 | **Direction** | You ask, it answers | Suggests a learning path and next projects |
 
 Think of coding assistants as a **power tool** for people who already know how to build,
-and CodeTutor as a **driving instructor** — you stay at the wheel, it coaches, and its
+and CodeTutor as a **driving instructor** - you stay at the wheel, it coaches, and its
 whole job is that you can do it yourself next time.
 
 It does several things, each triggered by a moment while you code:
@@ -55,14 +55,14 @@ It does several things, each triggered by a moment while you code:
 | **Next-step hint** | You finish a line (after a short pause) | One nudge toward the next move, *with the reasoning why* |
 | **Error coach** | The parser finds a typo/syntax error | What's wrong, the fix, and *why* Python rejects it |
 | **Context correction** | Valid Python is placed where it cannot behave as intended | What is misplaced, where it belongs conceptually, why Python behaves that way, and one next action |
-| **Stuck nudge** | You go idle ~10s (esp. on an unfinished line) | A gentle guiding question — "what's iterable after `for i in`?" |
+| **Stuck nudge** | You go idle ~10s (esp. on an unfinished line) | A gentle guiding question - "what's iterable after `for i in`?" |
 | **Explain (curiosity payoff)** | You say "Yes" to a first-use prompt | A real ~30-second explanation of the concept/library |
 | **Why is this here?** | You hover a line/token (or run the command) | What it does, why it's needed here, and what breaks without it |
 | **Ask the mentor** | You type a question in the chat panel | A free-form answer grounded in your code and goal |
 
 The side panel is an **interactive chat**: mentor hints stream in as bubbles (with the
 blueprint and learning-path progress in the header), and a box at the bottom lets you ask
-the mentor anything about your code — answered inline in your context.
+the mentor anything about your code - answered inline in your context.
 
 Inside a Python editor, right-click a line (or open its quick fixes) to choose
 **CodeTutor: Ask about this line** or **CodeTutor: Why is this line here?**. Automatic
@@ -115,31 +115,31 @@ A real session building a weather app (goal → you type → it teaches):
 Goal: a weather app that fetches the temperature for a city
 
 🗺️  BLUEPRINT
-    1. Pick and import the libraries you'll need — so Python has the tools it lacks.
-    2. Get the raw data (call the weather API) — nothing works without input.
-    3. Turn the response into a usable structure — so you can read values easily.
-    4. Print the result — the payoff of the goal.
+    1. Pick and import the libraries you'll need - so Python has the tools it lacks.
+    2. Get the raw data (call the weather API) - nothing works without input.
+    3. Turn the response into a usable structure - so you can read values easily.
+    4. Print the result - the payoff of the goal.
 
 you type ▸ import requests
-➡️  NEXT STEP — You imported `requests`. Next you'll define the input it works on
+➡️  NEXT STEP - You imported `requests`. Next you'll define the input it works on
     (the API URL), because a library needs something to act on.
-    💡 First time using requests — want a 30-second explanation of why it exists?
+    💡 First time using requests - want a 30-second explanation of why it exists?
 
 you type ▸ improt requests          (typo)
-⚠️  ERROR COACH — Looks like a typo of `import`. Python only recognizes the exact
+⚠️  ERROR COACH - Looks like a typo of `import`. Python only recognizes the exact
     keyword `import`; anything else is treated as a name it doesn't know, so it
     throws a SyntaxError. Fix it to `import ...`.
 
 you type ▸ for i in                  (then pause ~10s)
-💭  STUCK NUDGE — A `for ... in` loop needs something *iterable* on the right — a
+💭  STUCK NUDGE - A `for ... in` loop needs something *iterable* on the right - a
     list, string, or range. Which collection from your plan holds the cities?
 
 you ask  ▸ what's the difference between get and post?
-💬  ANSWER — `get()` retrieves data (reading the weather), `post()` sends new data
+💬  ANSWER - `get()` retrieves data (reading the weather), `post()` sends new data
     to a server. Since you're only reading, `get()` is the right call here.
 
 ── after you use loops cleanly a few times ──
-➡️  NEXT STEP — You've got loops down — I'll stay out of the way here. Move on to
+➡️  NEXT STEP - You've got loops down - I'll stay out of the way here. Move on to
     the next blueprint step.
 ```
 
@@ -150,23 +150,23 @@ not a validated measure of learning or mastery.
 
 ### The learner model (the central product hypothesis)
 
-The mentor keeps a **persistent, per-learner model** of observed practice — not a claim
+The mentor keeps a **persistent, per-learner model** of observed practice - not a claim
 that it can prove what someone knows. It stores concept-by-concept heuristic states such
 as mastered / practicing / struggling, plus **recurring
 misconceptions**. Every prompt is filtered through it, so it stops re-explaining what
 you've mastered and *changes strategy* (not volume) when you make the same mistake
 repeatedly.
 
-- **Concept detection** is deterministic (AST) — loops, dicts, recursion, async,
+- **Concept detection** is deterministic (AST) - loops, dicts, recursion, async,
   functions, HTTP, etc. The prototype labels a concept *mastered* after repeated clean
   appearances; that threshold is a tunable proxy, not an educational assessment.
-- **Misconception recurrence** — the same typo/mistake three times flips it to a
+- **Misconception recurrence** - the same typo/mistake three times flips it to a
   "recurring misconception," which triggers a different, deeper explanation.
 - **Storage is local SQLite** (`~/.codetutor/learner.db`) so learner data stays on the
   machine. Shared deployment is intentionally out of scope until authentication,
   retention, isolation, and consent controls are designed.
 
-Try it: run the demo twice — a concept gets mastered and the mentor backs off, a repeated
+Try it: run the demo twice - a concept gets mastered and the mentor backs off, a repeated
 typo gets flagged, and the profile persists across runs.
 
 ### The learning path (don't know what to build?)
@@ -180,7 +180,7 @@ A structured general curriculum (Foundations → Functions → Working with the 
 world → Program design → Real-world Python) maps each level to concepts;
 the mentor finds your current level from the learner model and proposes projects that
 exercise the concepts you *haven't* mastered yet. As you master them, the suggestions move
-you up the path — a step-by-step route toward expert. The side panel shows your progress
+you up the path - a step-by-step route toward expert. The side panel shows your progress
 per level. All deterministic, so it works offline (`GET /suggest-goal?learner_id=...`).
 
 ### Resume, verify, and move forward
@@ -209,42 +209,42 @@ learned**, while retaining the learner's broader progress.
 └────────────────────┘           └───────────────────────┘
 ```
 
-- **The editor is a client** — it runs on each laptop, detects triggers, renders hints.
+- **The editor is a client** - it runs on each laptop, detects triggers, renders hints.
   It holds *no* intelligence.
-- **The Python service is the brain** — blueprint, lesson-plan state, curiosity meter.
+- **The Python service is the brain** - blueprint, lesson-plan state, curiosity meter.
   The cheap deterministic layer (Python's own parser) finds typos/syntax errors; the
   **LLM is reserved for open-ended teaching** (blueprint, next-step reasoning, nudges,
   phrasing error explanations). This keeps it fast, cheap, and accurate.
-- **The LLM is config-driven** — use Anthropic directly or point `OPENAI_BASE_URL` at
+- **The LLM is config-driven** - use Anthropic directly or point `OPENAI_BASE_URL` at
   an OpenAI-compatible endpoint that your environment permits.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and deployment notes.
 
 ## Key design decisions
 
-These are the tradeoffs I made deliberately — the "why," not just the "what."
+These are the tradeoffs I made deliberately - the "why," not just the "what."
 
 **The LLM provider is replaceable; the learner model is the product hypothesis.** Calling an
 API. The differentiator is a persistent, per-concept model of the learner that filters
-every response — so it stops explaining what you've mastered and *changes strategy* (not
+every response - so it stops explaining what you've mastered and *changes strategy* (not
 volume) when you repeat a mistake. That's where the effort went.
 
 **Two layers, split on purpose.** A cheap deterministic layer (Python's own parser)
-handles what parsers do better than any model — finding typos, judging whether a line is
+handles what parsers do better than any model - finding typos, judging whether a line is
 finished, extracting concepts. The LLM is reserved for open-ended teaching. Routing every
 keystroke through a model would be slow, expensive, and would hallucinate syntax rules;
 this split avoids all three.
 
 **Multi-provider, switchable at runtime.** `llm.py` supports **Anthropic (Claude)**
 natively (Messages API) *and* any **OpenAI-compatible** endpoint (OpenAI, Azure, Ollama,
-private gateways) — both can be configured at once. Each request is routed to the right
+private gateways) - both can be configured at once. Each request is routed to the right
 provider by model name (`claude*` → Anthropic, else OpenAI), and the learner can switch
 models mid-session from the editor ("CodeTutor: Change model") with no restart. The OpenAI
 path also self-heals across API generations (adapting `max_tokens`/`max_completion_tokens`
 and `temperature` for 4o vs GPT-5.x/o-series).
 
 **Automatic failover.** With both provider keys set, a failed request on the primary
-model (timeout, empty response, error) is automatically retried on the other provider —
+model (timeout, empty response, error) is automatically retried on the other provider -
 so a flaky or slow model doesn't break the session. Configurable via `MENTOR_FAILOVER`
 and `MENTOR_FALLBACK_MODEL`/`MENTOR_FALLBACK_FAST`; a manual "Change model" choice opts
 out (your explicit pick is respected).
@@ -265,7 +265,7 @@ deterministic mock responses. This makes the project runnable in seconds, keeps 
 suite hermetic (no network, no cost), and cleanly separates "do the mechanics work" from
 "is the teaching good."
 
-**Thin client, thick brain.** The VS Code extension holds zero intelligence — it only
+**Thin client, thick brain.** The VS Code extension holds zero intelligence - it only
 detects triggers and renders replies. All logic lives in the Python service, which keeps
 the hard part testable and portable to any editor later.
 
@@ -333,7 +333,7 @@ cd mentor-service
 python3 demo_cli.py            # replays a session; shows the learner model evolving
 ```
 
-Runs in **offline/mock mode**. To use a real model, put a key in `.env` — either
+Runs in **offline/mock mode**. To use a real model, put a key in `.env` - either
 `ANTHROPIC_API_KEY` (Claude, the default) or `OPENAI_API_KEY` (see `config.example.env`).
 
 ### 1b. Judge teaching quality (the important one)
@@ -352,8 +352,8 @@ first-run chooser makes that trade-off visible. See the
 instructions. Cloud keys stay in the ignored local `mentor-service/.env` file; never put
 them in VS Code settings, source code, issues, or chat.
 
-The harness runs every behavior — blueprint, next-step, error, stuck, **explain**
-(curiosity payoff), and **why-is-this-here** — across scenarios and writes a Markdown
+The harness runs every behavior - blueprint, next-step, error, stuck, **explain**
+(curiosity payoff), and **why-is-this-here** - across scenarios and writes a Markdown
 report. This is how you answer "is the mentoring actually good?" and tune `prompts.py`.
 The [tutor reliability guide](docs/TUTOR_RELIABILITY.md) explains the deterministic
 checks, progressive-hint policy, stale-response protection, and limits of this gate.
@@ -395,7 +395,7 @@ CodeTutor/
 │   │   ├── mentor.py        # orchestrates the four behaviors
 │   │   └── server.py        # FastAPI: /session, /event, /health, /learner/{id}/profile
 │   ├── tests/               # hermetic pytest suite (no network/LLM)
-│   ├── demo_cli.py          # replay harness — feel the mentor with no editor
+│   ├── demo_cli.py          # replay harness - feel the mentor with no editor
 │   ├── eval_harness.py      # run every behavior across scenarios -> Markdown report
 │   ├── check_llm.py         # one-call connectivity smoke test
 │   ├── requirements.txt
@@ -475,7 +475,7 @@ conservative runtime case where a function reads a local name before its later a
 ## Open-source learning vision
 
 The current release offers a Python foundation journey and an opt-in Structured AI
-Engineering Learning Path. The AI journey is a structured curriculum and routing capability—not a
+Engineering Learning Path. The AI journey is a structured curriculum and routing capability-not a
 claim that completing projects alone proves professional expertise. The near-term north
 star remains an excellent Python mentor
 that helps a learner build understanding and independence instead of generating finished
