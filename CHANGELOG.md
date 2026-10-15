@@ -5,6 +5,11 @@ public releases begin.
 
 ## Unreleased
 
+- Fixed restart discovery when VS Code restores focus outside the Python editor, and
+  re-armed idle guidance after all unfinished lesson resumes, even if the initial code
+  check intentionally returns no hint.
+- Added Continue saved lesson and Open tutor panel commands, visible resume errors,
+  and preserved completed-lesson actions without restarting coaching.
 - Bound lesson chat, hints, fixes, and checks to the selected Python document, displayed
   its filename, and added an explicit command to attach a saved or replacement file.
 - Discarded chat and hint replies when their lesson or document version changes.

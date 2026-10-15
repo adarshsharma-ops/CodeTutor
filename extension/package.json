@@ -13,6 +13,14 @@
   "contributes": {
     "commands": [
       {
+        "command": "codetutor.resume",
+        "title": "CodeTutor: Continue saved lesson"
+      },
+      {
+        "command": "codetutor.showChat",
+        "title": "CodeTutor: Open tutor panel"
+      },
+      {
         "command": "codetutor.attachLessonFile",
         "title": "CodeTutor: Use current Python file for this lesson"
       },

@@ -191,6 +191,12 @@ activity time. Restarting VS Code or the mentor service offers **Continue lesson
 of silently resetting the learner to step one. The saved code value is a short fingerprint
 rather than a second copy of the source; the current file is evaluated again on return.
 
+On restart, CodeTutor offers the saved lesson even if focus is in a terminal or another
+tab. Choose **Continue lesson** to reopen the file, blueprint, and coaching. You can also
+run **CodeTutor: Continue saved lesson** or **CodeTutor: Open tutor panel** from the
+Command Palette. If the mentor service is unavailable, start it and retry Continue saved
+lesson; no progress reset is required.
+
 Guided projects expose **Run lesson check** in the mentor panel and Command Palette.
 The panel shows the lesson's attached Python filename. Opening another Python file will
 not silently change the tutor's context. To switch files or attach a saved untitled file,

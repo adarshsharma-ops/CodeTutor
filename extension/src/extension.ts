@@ -167,6 +167,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codetutor.start", () => requestManualStart(context)),
+    vscode.commands.registerCommand("codetutor.resume", () => startSession(context, true)),
     vscode.commands.registerCommand("codetutor.attachLessonFile", attachCurrentLessonFile),
     vscode.commands.registerCommand("codetutor.explainLine", explainLine),
     vscode.commands.registerCommand("codetutor.askLine", askLine),
@@ -179,7 +180,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("codetutor.checkLesson", checkCurrentLesson),
     vscode.commands.registerCommand("codetutor.nextLesson", startNextLesson),
     vscode.commands.registerCommand("codetutor.showChat", () => {
-      if (panel) MentorPanel.show(context, handleAsk, handlePanelAction);
+      if (MentorPanel.current && sessionId) panel = MentorPanel.show(context, handleAsk, handlePanelAction);
+      else void startSession(context, true);
     }),
     vscode.commands.registerCommand("codetutor.togglePause", togglePause),
     vscode.workspace.onDidChangeTextDocument(onEdit),
@@ -315,13 +317,12 @@ async function activateSavedProvider(label: string): Promise<boolean> {
 function maybeAutoStart() {
   if (sessionId || starting || autoPrompted) return;
   autoPrompted = true;
-  startSession(extContext, false);
+  void startSession(extContext, false);
 }
 
 async function initializeOnLaunch(context: vscode.ExtensionContext): Promise<void> {
   if (starting) return;
   starting = true;
-  let providerConfiguredNow = false;
   try {
     if (!(await ensureConsent())) return;
     const onboardingDone = extContext.globalState.get<boolean>(
@@ -329,7 +330,6 @@ async function initializeOnLaunch(context: vscode.ExtensionContext): Promise<voi
     );
     if (!onboardingDone) {
       if (!(await setupProvider(false))) return;
-      providerConfiguredNow = true;
     }
   } catch (err) {
     console.error("CodeTutor launch setup failed:", err);
@@ -339,13 +339,16 @@ async function initializeOnLaunch(context: vscode.ExtensionContext): Promise<voi
     starting = false;
   }
 
-  const active = vscode.window.activeTextEditor?.document;
-  if (active?.languageId === "python") {
-    lastPyDoc = active;
-    maybeAutoStart();
-  } else if (providerConfiguredNow) {
-    // First-run onboarding should flow directly into lesson choice. The learner should
-    // not have to discover that creating a blank Python file is an undocumented trigger.
+  const restored = vscode.window.activeTextEditor?.document.languageId === "python"
+    ? vscode.window.activeTextEditor.document
+    : vscode.window.visibleTextEditors.find(editor => editor.document.languageId === "python")?.document;
+  if (restored && !sessionId) lastPyDoc = restored;
+  // VS Code may restore focus to a terminal, a non-Python tab, or a previous panel.
+  // Resume discovery must not depend on the active editor or a new edit event.
+  if (queuedManualStart) {
+    queuedManualStart = false;
+    await startSession(context, true, true);
+  } else {
     maybeAutoStart();
   }
 }
@@ -517,7 +520,8 @@ async function startSession(context: vscode.ExtensionContext, manual: boolean, f
     }
     let saved: ResumeResponse | null = null;
     if (!forceNew) {
-      try { saved = await client.resume("local"); } catch { /* resume is optional */ }
+      // A failed lookup must remain visible; it does not mean there is no saved lesson.
+      saved = await client.resume("local");
     }
     if (saved) {
       const age = saved.last_activity ? new Date(saved.last_activity * 1000).toLocaleString() : "recently";
@@ -599,20 +603,19 @@ async function attachSession(context: vscode.ExtensionContext, res: SessionRespo
   lastSurfacedFingerprint = "";
   panel.resetGuidance();
   readinessPrompted = false;
+  lastReadyCode = "";
+  nextLesson = undefined;
+  const completed = "status" in res && res.status === "completed";
   panel.setBlueprint(res.blueprint || []);
   if ("current_step" in res) {
     panel.setLessonProgress(res.current_step, res.completed_steps || []);
-    if (res.status === "completed") {
-      nextLesson = res.next;
-      panel.showLessonCheck(res.checks || [], true, res.next);
-    }
   }
   try {
     const s = await client.suggestGoals("local", learningPath, learnerLevel);
     panel.setPath(s.path.levels, s.path.current_level);
   } catch { /* path is optional */ }
-  panel.push({ kind: "blueprint", text: resumed
-    ? `Welcome back. Continuing in ${learnerLevel} mode at your saved step.`
+  if (!completed) panel.push({ kind: "blueprint", text: resumed
+    ? `Welcome back. Continuing in ${learnerLevel} mode. Next step: ${"next_step" in res ? res.next_step : res.blueprint[0] || "Review the blueprint"}`
     : `Teaching mode: ${learnerLevel}. Here's the plan we'll build toward.` });
 
   const pyEditor = await ensureLessonEditor(res, resumed);
@@ -622,13 +625,20 @@ async function attachSession(context: vscode.ExtensionContext, res: SessionRespo
   client.bindLessonContext(() => sessionId && lastPyDoc && !lastPyDoc.isClosed
     ? { sessionId, fileUri: lastPyDoc.uri.toString(), version: lastPyDoc.version }
     : undefined);
-  if (pyEditor && existing.split("\n").filter((l) => l.trim()).length >= 2) {
-    lastHintedCode = existing; lastHintAt = Date.now();
-    react(pyEditor, existing, "completed");
-  } else if (pyEditor && learnerLevel === "beginner") {
-    const idleMs = vscode.workspace.getConfiguration("codetutor").get<number>("idleSeconds", 10) * 1000;
-    scheduleStallCheck(pyEditor, 0, idleMs);
+  if (completed && "status" in res) {
+    nextLesson = res.next;
+    panel.showLessonCheck(res.checks || [], true, res.next);
+    return;
   }
+  if (existing.trim()) {
+    lastHintedCode = existing; lastHintAt = Date.now();
+    await react(pyEditor, existing, "completed");
+  }
+  // A completed-line check can intentionally return no advice, e.g. an open block.
+  // Always arm the idle lifecycle for an unfinished lesson, including one-line files.
+  if (sessionId !== res.session_id || lastPyDoc !== pyEditor.document) return;
+  const idleMs = vscode.workspace.getConfiguration("codetutor").get<number>("idleSeconds", 10) * 1000;
+  scheduleStallCheck(pyEditor, 0, idleMs);
 }
 
 async function ensureLessonEditor(
@@ -1243,6 +1253,9 @@ async function fixLine(lineArg?: number) {
 
 function friendlyError(err: unknown): string {
   const raw = String(err);
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|resume 5\d\d/i.test(raw)) {
+    return "CodeTutor could not reach the mentor service. Start it with bash run_server.sh in mentor-service, then run CodeTutor: Continue saved lesson. Your saved progress has not been reset.";
+  }
   if (/429|quota|usage limit|insufficient_quota/i.test(raw)) {
     return "CodeTutor's model usage limit was reached. Try another configured model, check the provider account, or continue later.";
   }
