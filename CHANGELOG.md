@@ -5,6 +5,24 @@ public releases begin.
 
 ## Unreleased
 
+- Bound lesson chat, hints, fixes, and checks to the selected Python document, displayed
+  its filename, and added an explicit command to attach a saved or replacement file.
+- Discarded chat and hint replies when their lesson or document version changes.
+- Added explicit pasted-code review without awarding lesson progress from pasted snippets.
+- Replaced converter magic-number checks with parsed arithmetic checks supporting renamed
+  variables and equivalent formulas; scripts no longer require an unannounced function.
+- Added conservative branch-assignment and explicit conversion-menu checks, including
+  invalid input that reaches an unassigned result.
+- Kept readiness in a persistent status area instead of replacing current guidance.
+- Added a model-independent Adaptive Intervention Engine that classifies observable
+  learner state as progressing, thinking, stuck, off-path, or error before an LLM is
+  allowed to phrase guidance.
+- Added Current Guidance controls for another hint, a similar example, a one-minute
+  quiet period, and consent-gated line repair when Python reports a verified error.
+- Added intervention outcome tracking: a subsequent code change records progress, while
+  a request for deeper help records that the previous hint was insufficient.
+- Added deterministic learner-trace replay tests for state accuracy, interruption timing,
+  confidence, and progressive-help availability.
 - Added a beginner-first installation guide with complete macOS/Linux and Windows
   commands, expected output, model onboarding, relaunch steps, and common fixes.
 - Made Current Guidance the dominant panel area and moved earlier guidance into a

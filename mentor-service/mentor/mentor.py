@@ -22,6 +22,8 @@ from .llm import LLMClient, LLMError
 from .learner_model import LearnerModel
 from .lesson_progress import possible_implicit_none_functions
 from .state import Session
+from .intervention import decide_intervention
+from .program_evidence import converter_evidence, conversion_direction
 from .reliability import (advice_key, beginnerize, facts_for_prompt, hint_policy,
                           response_is_grounded, safe_automatic_fallback)
 
@@ -37,6 +39,7 @@ class MentorMessage:
     via: Optional[str] = None       # which model/provider actually served this response
     replacement: Optional[str] = None  # explicit, learner-requested line replacement only
     escalation_level: Optional[int] = None
+    intervention: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -59,7 +62,12 @@ class Mentor:
     # --- 1. Blueprint -----------------------------------------------------
     def blueprint(self, session: Session) -> MentorMessage:
         via = None
-        if self.llm.offline:
+        if _is_temperature_converter(session.goal):
+            # Use the same step order as deterministic progress tracking. A model may
+            # explain these steps, but must not invent a different contract.
+            steps = _offline_blueprint(session.goal, session.learner_level)
+            via = "verified lesson plan"
+        elif self.llm.offline:
             steps = _offline_blueprint(session.goal, session.learner_level)
         else:
             try:
@@ -146,7 +154,7 @@ class Mentor:
         key = advice_key("next_step", a)
         level = session.next_hint_level(key)
         via = None
-        if self.llm.offline or self.llm.config.local_openai:
+        if (session.learner_level == "beginner" and _is_temperature_converter(session.goal)) or self.llm.offline or self.llm.config.local_openai:
             text = _offline_next_step(a, session, profile)
         else:
             text, via = self.llm.chat_with_failover(
@@ -187,6 +195,10 @@ class Mentor:
         analysis = analyze(code)
         key = advice_key("context", analysis, issue)
         level = session.next_hint_level(key)
+        decision = decide_intervention(
+            analysis, code_changed=False, idle_seconds=0, hint_level=level,
+            learner_level=session.learner_level, event="context",
+        )
         via = None
         if session.learner_level == "beginner" and not issue.ask_intent:
             text = _beginner_issue_message(issue)
@@ -219,9 +231,11 @@ class Mentor:
             "input_outside_loop": "Read a fresh choice inside the loop",
             "prompt_string_used_as_value": "Use input() to collect the learner's answer",
         }
+        session.record_intervention(decision.intervention_id, code)
         return MentorMessage(
             kind=kind, text=text, line=issue.line,
             headline=semantic_headlines.get(issue.code, _headline_for(text, kind)), via=via,
+            escalation_level=level, intervention=decision.to_dict(),
         )
 
     # --- 3. Error -> explanation -----------------------------------------
@@ -257,6 +271,12 @@ class Mentor:
                 weight=2 if recurring else 1)
 
         profile = self.learner.profile(session.learner_id)
+        key = advice_key("error", a)
+        level = session.next_hint_level(key)
+        decision = decide_intervention(
+            a, code_changed=False, idle_seconds=0, hint_level=level,
+            learner_level=session.learner_level, event="error",
+        )
 
         via = None
         if self.llm.offline or self.llm.config.local_openai:
@@ -276,20 +296,46 @@ class Mentor:
                     recurring=recurring_note),
                 models=self._strong_chain(session),
             )
+        session.record_intervention(decision.intervention_id, code)
         return MentorMessage(kind="error", text=text, line=issue.line,
-                             headline=_headline_for(text, "error"), via=via)
+                             headline=_headline_for(text, "error"), via=via,
+                             escalation_level=level, intervention=decision.to_dict())
 
     # --- 4. Stuck / idle -> nudge ----------------------------------------
-    def on_stuck(self, session: Session, code: str, idle_seconds: int) -> MentorMessage:
-        session.observe_progress(code)
+    def on_stuck(self, session: Session, code: str, idle_seconds: int,
+                 help_action: str = "") -> MentorMessage:
+        code_changed = session.observe_progress(code)
         a = analyze(code)
         _update_current_step(session, a)
         completeness = "complete" if a.last_line_complete else "unfinished"
         profile = self.learner.profile(session.learner_id)
         key = advice_key("stuck", a)
+        if help_action == "similar_example":
+            session.hint_levels[key] = max(3, session.hint_levels.get(key, 0))
         level = session.next_hint_level(key)
+        decision = decide_intervention(
+            a, code_changed=code_changed, idle_seconds=idle_seconds,
+            hint_level=level, learner_level=session.learner_level, event="stuck",
+        )
         via = None
-        guided = _beginner_composition_hint(session, a, level) or _guided_subgoal_hint(session, a, level)
+        corrections = [issue for issue in a.context_issues if not issue.ask_intent]
+        if corrections:
+            return self.on_context_issue(session, code, corrections[0])
+        if decision.learner_state == "thinking" and decision.confidence < 0.7 and not help_action:
+            text = (
+                "You may still be thinking, and I don't see a verified error or unfinished "
+                "statement. I can give one small hint, show a similar example, or wait while "
+                "you continue."
+            )
+            session.record_intervention(decision.intervention_id, code)
+            return MentorMessage(
+                kind="stuck", text=text, line=_line_count(code),
+                headline="Thinking or stuck? Choose how I should help",
+                via="confidence-aware check-in", escalation_level=level,
+                intervention=decision.to_dict(),
+            )
+        guided = (_similar_example_hint(session, a) if help_action == "similar_example" else "")
+        guided = guided or _beginner_composition_hint(session, a, level) or _guided_subgoal_hint(session, a, level)
         if guided:
             text = guided
             via = "guided subgoal"
@@ -305,7 +351,7 @@ class Mentor:
             # Syntax has priority over generic idle coaching. The active coaching card
             # will be replaced with this one verified diagnosis, not an additional bubble.
             return self.on_error(session, code, a)
-        elif self.llm.offline or self.llm.config.local_openai:
+        elif (session.learner_level == "beginner" and _is_temperature_converter(session.goal)) or self.llm.offline or self.llm.config.local_openai:
             text = _offline_stuck(a, session, level)
             via = "verified local guidance"
         else:
@@ -335,9 +381,10 @@ class Mentor:
             via = "verified fallback"
         text = beginnerize(text)
         session.hints_given += 1
+        session.record_intervention(decision.intervention_id, code)
         return MentorMessage(kind="stuck", text=text, line=_line_count(code),
                              headline=_headline_for(text, "stuck"), via=via,
-                             escalation_level=level)
+                             escalation_level=level, intervention=decision.to_dict())
 
     # --- Curriculum: suggest goals + report the learning path -------------
     def suggest_goals(self, learner_id: str, limit: int = 3) -> List[dict]:
@@ -376,6 +423,21 @@ class Mentor:
     # --- 7. Free-form "ask the mentor" (chat input) -----------------------
     def ask(self, session: Session, question: str, code: str = "") -> MentorMessage:
         via = None
+        pasted = _pasted_python(question)
+        if pasted is not None:
+            code = pasted
+            session.last_code = code
+            # Pasted source is an explicit review request, not an invitation to start
+            # a new function simply because it contains conversion terminology.
+            diagnostic = _deterministic_diagnostic_answer(session, "what is wrong", code)
+            return MentorMessage(kind="answer", text="Reviewing the code you pasted. " + diagnostic,
+                                 via="Python-aware diagnosis")
+        fallback = _implicit_none_answer(session, question, code)
+        if fallback:
+            return MentorMessage(kind="answer", text=fallback, via="verified project check")
+        diagnostic = _deterministic_diagnostic_answer(session, question, code)
+        if diagnostic:
+            return MentorMessage(kind="answer", text=diagnostic, via="Python-aware diagnosis")
         if session.awaiting_understanding:
             pattern = session.awaiting_understanding
             session.awaiting_understanding = ""
@@ -389,12 +451,6 @@ class Mentor:
                     models=self._strong_chain(session), max_tokens=300,
                 )
             return MentorMessage(kind="understanding_check", text=text, via=via)
-        fallback = _implicit_none_answer(session, question, code)
-        if fallback:
-            return MentorMessage(kind="answer", text=fallback, via="verified project check")
-        diagnostic = _deterministic_diagnostic_answer(session, question, code)
-        if diagnostic:
-            return MentorMessage(kind="answer", text=diagnostic, via="Python-aware diagnosis")
         guided = _explicit_guided_subgoal_answer(session, question, code)
         if not guided:
             guided = _goal_aware_beginner_answer(session, question, code)
@@ -721,6 +777,41 @@ def _beginner_composition_hint(session: Session, a: Analysis, level: int) -> str
     return ("Now call the pricing function with the collected age and show its returned value, "
             "for example by passing the call to `print()`. This connects input → decision → output.")
 
+
+def _similar_example_hint(session: Session, a: Analysis) -> str:
+    """Give a structurally similar example without completing the active lesson."""
+    last = a.last_line.strip()
+    if last.startswith("for ") or "loops" in a.concepts:
+        return (
+            "Here is the same loop shape with unrelated data:\n```python\n"
+            "colors = [\"red\", \"blue\"]\n"
+            "for color in colors:\n"
+            "    print(color)\n```\n"
+            "Notice that the name after `for` receives one item at a time. Use that shape "
+            "with your own collection and action."
+        )
+    if a.condition_hint or last.startswith(("if ", "elif ", "while ")):
+        return (
+            "Here is a comparable decision using a different subject:\n```python\n"
+            "if score >= 50:\n"
+            "    print(\"passed\")\n```\n"
+            "The operator completes a yes-or-no question, and the colon opens the code that "
+            "runs when it is true. Apply that shape to your own condition."
+        )
+    if last in {"import", "from"}:
+        return (
+            "For a different goal, `import random` would make Python's random-choice tools "
+            "available. The useful library depends on the capability the program needs; use "
+            "your blueprint's next action to choose yours rather than copying this import."
+        )
+    return (
+        "Here is a similar function shape using a different calculation:\n```python\n"
+        "def double(number):\n"
+        "    return number * 2\n```\n"
+        "It receives one value, transforms it, and returns the result. Reuse that shape, not "
+        "the names or calculation, for your current step."
+    )
+
 def _offline_blueprint(goal: str, level: str = "beginner") -> List[str]:
     low = goal.lower()
     if _is_age_ticket_project(low):
@@ -767,13 +858,13 @@ def _offline_blueprint(goal: str, level: str = "beginner") -> List[str]:
                     "Add property-based tests for inverse conversions and edge cases"]
         if level == "intermediate":
             return ["Read a numeric temperature and validate the input",
-                    "Implement focused Celsius-to-Fahrenheit and reverse functions",
+                    "Implement Celsius-to-Fahrenheit and reverse rules in a script or focused functions",
                     "Let the user select the conversion direction",
                     "Test freezing, boiling, negative, and invalid values"]
         return ["Use `input()` to ask for the temperature; no import is needed",
                 "Convert the typed text to a number with `float()` so calculations work",
-                "Ask whether the value is Celsius or Fahrenheit",
-                "Apply the matching conversion formula and store the result",
+                "Ask whether the value is Celsius or Fahrenheit with `input()`, then call `.lower()`; c means the input is Celsius and f means the input is Fahrenheit",
+                ("Define conversion functions and return their calculated results" if "function" in low else "Apply the matching conversion formula and store the result; a script is fine and functions are optional"),
                 "Use `print()` to show the converted value with its unit",
                 "Test 0°C → 32°F and 32°F → 0°C"]
     return [
@@ -830,6 +921,19 @@ def _offline_stuck(a: Analysis, session: Session, level: int = 1) -> str:
     if a.condition_hint:
         return a.condition_hint
     line = a.last_line.strip()
+    if session.learner_level == "beginner" and _is_temperature_converter(session.goal):
+        text = _beginner_step_message(session)
+        if level >= 2:
+            details = [
+                'For this step, try `temperature = input("Enter a temperature: ")`. The variable remembers exactly what was typed.',
+                'Try `temperature = float(temperature)`, using your own input variable name. For example, the text "12.5" becomes the number 12.5.',
+                'Try `unit = input("Input unit (C/F): ").lower()`. Here c describes the input, so c selects Celsius-to-Fahrenheit.',
+                'For Celsius input, multiply by 9/5 and add 32. For Fahrenheit input, subtract 32 first, then multiply by 5/9. A script is fine; a function is optional unless that is your stated lesson goal.',
+                'Show the value produced by the selected branch. Keep the print inside valid branches, or make sure invalid input cannot reach a print of an unassigned result.',
+                'Test c with 0 (expect 32), f with 32 (expect 0), and an invalid letter (expect a clear message without an error). Then use Run lesson check.',
+            ]
+            text += "\nTry: " + details[min(session.current_step, 5)]
+        return text
     if session.learner_level == "beginner" and any(
             term in session.goal.lower() for term in ("to-do", "todo", "task list")):
         step = session.current_step_text()
@@ -938,17 +1042,21 @@ def _update_current_step(session: Session, a: Analysis) -> None:
         except SyntaxError:
             tree = None
         calls = list(ast.walk(tree)) if tree is not None else []
-        has_input = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                        and n.func.id == "input" for n in calls)
+        input_calls = [n for n in calls if isinstance(n, ast.Call)
+                       and isinstance(n.func, ast.Name) and n.func.id == "input"]
+        def is_unit_prompt(call):
+            prompt = call.args[0].value.lower() if call.args and isinstance(call.args[0], ast.Constant) and isinstance(call.args[0].value, str) else ""
+            return any(term in prompt for term in ("unit", "c or f", "c/f", "(c)", "convert"))
+        has_input = any(not is_unit_prompt(call) for call in input_calls)
         has_numeric = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                           and n.func.id in {"float", "int"} for n in calls)
-        has_unit_input = sum(1 for n in calls if isinstance(n, ast.Call)
-                             and isinstance(n.func, ast.Name) and n.func.id == "input") >= 2
+        has_unit_input = any(is_unit_prompt(call) for call in input_calls)
         has_normalized_unit = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                                   and n.func.attr in {"upper", "lower"} for n in calls)
-        has_c_formula = bool(re.search(r"celsius\s*\*\s*(?:9\s*/\s*5|1\.8).{0,20}\+\s*32", source))
-        has_f_formula = bool(re.search(r"\(?(?:fahrenheit|temp\w*)\s*-\s*32\)?.{0,20}\*\s*(?:5\s*/\s*9|0\.5{2,})", source))
-        conversion_names = {"celsius_to_fahrenheit", "fahrenheit_to_celsius"}
+        evidence = converter_evidence(tree)
+        has_c_formula = "c_to_f" in evidence["directions"]
+        has_f_formula = "f_to_c" in evidence["directions"]
+        conversion_names = {fn.name for fn in evidence["functions"]}
         uses_result = False
         if tree is not None:
             for node in ast.walk(tree):
@@ -970,6 +1078,17 @@ def _update_current_step(session: Session, a: Analysis) -> None:
                     }
                     if printed_names & assigned_results:
                         uses_result = True
+        if tree is not None and not conversion_names:
+            formula_targets = {target.id for node in evidence["formulas"]
+                               if isinstance(node, ast.Assign) for target in node.targets
+                               if isinstance(target, ast.Name)}
+            uses_result = any(
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "print" and any(
+                    isinstance(child, ast.Name) and child.id in formula_targets
+                    for child in ast.walk(node)
+                ) for node in calls
+            )
         if not has_input:
             step = 0
         elif not has_numeric:
@@ -1009,16 +1128,16 @@ def _is_temperature_converter(goal: str) -> bool:
 def _beginner_step_message(session: Session) -> str:
     step = session.current_step_text()
     watch = "Write only this step before moving on; I will check it against the program goal."
-    if "input()" in step:
+    if "Celsius or Fahrenheit" in step:
+        watch = "Call `.lower()` with parentheses. Here c describes Celsius input, and f describes Fahrenheit input."
+    elif "input()" in step:
         watch = "`input()` returns text, so the next step will convert that text before doing arithmetic."
     elif "float()" in step:
         watch = "Keep the converted number in a clearly named variable so both formulas can use it."
-    elif "Celsius or Fahrenheit" in step:
-        watch = "Call `.upper()` with parentheses; `.upper` by itself is only the method, not its result."
     elif "formula" in step:
-        watch = "Each function should return its result; do not print inside the formula function yet."
+        watch = "Store the calculated result in a script, or return it from a function. Keep invalid input away from code that expects a result."
     elif "print()" in step:
-        watch = "Store the returned conversion or pass the function call directly to `print()`."
+        watch = "Print the stored result or the value returned by a conversion function."
     return f"Do this next: {step}.\nWhy: it is the next verified piece needed for `{session.goal}`.\nWatch for: {watch}"
 
 
@@ -1115,12 +1234,29 @@ def _deterministic_diagnostic_answer(session: Session, question: str, code: str)
             f"the behavior is correct. Your next unchecked lesson step is: {session.current_step_text()}")
 
 
+def _pasted_python(question: str) -> str | None:
+    """Accept explicitly pasted Python without mistaking ordinary questions for code."""
+    fenced = re.search(r"```(?:python)?\s*\n(.*?)```", question, re.S | re.I)
+    marker = re.search(r"(?:this is|here is|here's)\s+(?:my\s+)?(?:full\s+)?code\s*:\s*", question, re.I)
+    candidate = fenced.group(1) if fenced else question[marker.end():] if marker else ""
+    if not candidate.strip():
+        return None
+    try:
+        ast.parse(candidate.strip())
+    except SyntaxError:
+        # Still review a clearly introduced snippet so its syntax can be explained.
+        if marker or fenced:
+            return candidate.strip()
+        return None
+    return candidate.strip()
+
+
 def _explicit_guided_subgoal_answer(session: Session, question: str, code: str) -> str:
     """Turn an explicit Beginner question into a persistent, observable subgoal."""
     if session.learner_level != "beginner" or not _is_temperature_converter(session.goal):
         return ""
     q = question.lower()
-    asks_function = any(word in q for word in ("function", "method", "convert"))
+    asks_function = any(word in q for word in ("function", "method"))
     c_to_f = any(word in q for word in ("celsius", "fahrenheit", "conversion"))
     if not (asks_function and c_to_f):
         return ""
@@ -1139,9 +1275,16 @@ def _guided_subgoal_hint(session: Session, a: Analysis, level: int) -> str:
         return ""
     source = a.source
     signature = re.search(r"(?m)^\s*def\s+celsius_to_fahrenheit\s*\(\s*celsius\s*\)\s*:\s*$", source)
-    correct_formula = re.search(
-        r"(?m)^\s*return\s+\(?\s*celsius\s*\*\s*(?:9\s*/\s*5|1\.8)\s*\)?\s*\+\s*32\s*$",
-        source,
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+    evidence = converter_evidence(tree)
+    correct_formula = any(
+        fn.name == session.guided_subgoal and any(
+            isinstance(node, ast.Return) and node.value is not None
+            and conversion_direction(node.value) == "c_to_f" for node in ast.walk(fn)
+        ) for fn in evidence["functions"]
     )
     if correct_formula:
         session.guided_subgoal = ""

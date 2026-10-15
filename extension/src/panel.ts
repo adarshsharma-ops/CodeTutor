@@ -76,6 +76,14 @@ export class MentorPanel {
     this.post({ type: "blueprint", steps });
   }
 
+  setLessonFile(name: string): void {
+    this.post({ type: "lessonFile", name });
+  }
+
+  clearReadiness(): void {
+    this.post({ type: "clearReadiness" });
+  }
+
   setLessonProgress(currentStep: number, completedSteps: number[]): void {
     this.post({ type: "lessonProgress", currentStep, completedSteps });
   }
@@ -189,9 +197,11 @@ export class MentorPanel {
 </style></head><body>
   <header>
     <h3>🎓 CodeTutor</h3>
+    <div id="lesson-file" style="font-size:12px;opacity:.8"></div>
     <div id="path"></div>
     <details open><summary>Blueprint</summary><div id="blueprint"><span style="opacity:.6;font-size:12px">Set a goal to see the plan.</span></div></details>
     <div id="lesson-actions"><button class="action" data-action="check">Run lesson check</button></div>
+    <div id="readiness" style="font-size:12px;margin-top:6px"></div>
   </header>
   <main id="guidance-layout">
     <section id="current-guidance"></section>
@@ -299,6 +309,20 @@ export class MentorPanel {
     actions.appendChild(button);
   }
 
+  function addInterventionActions(m) {
+    const intervention = m && m.intervention;
+    if (!intervention || !Array.isArray(intervention.actions)) return;
+    const labels = {
+      another_hint: 'Give me another hint',
+      similar_example: 'Show a similar example',
+      wait: 'Let me keep trying',
+      fix_and_explain: 'Fix this and explain',
+    };
+    intervention.actions.forEach(action => {
+      if (labels[action]) addGuidanceAction(labels[action], action, action === 'another_hint');
+    });
+  }
+
   function setHistorySize(clientY) {
     const rect = guidanceLayout.getBoundingClientRect();
     const min = Math.min(96, rect.height * .25);
@@ -362,14 +386,18 @@ export class MentorPanel {
       const m = d.msg;
       typing.textContent = '';
       const viaTag = m.via && m.via !== 'offline' ? '  · via ' + m.via : '';
-      const label = (icons[m.kind]||'•') + ' ' + (m.kind||'').replace('_',' ') + (m.line ? '  · line '+m.line : '') + viaTag;
+      const stateTag = m.intervention ? '  · detected ' + m.intervention.learner_state.replace('_',' ') : '';
+      const label = (icons[m.kind]||'•') + ' ' + (m.kind||'').replace('_',' ') + (m.line ? '  · line '+m.line : '') + stateTag + viaTag;
       showCurrent(m, label);
+      addInterventionActions(m);
     } else if (d.type === 'coach') {
       const m = d.msg;
       typing.textContent = '';
       const viaTag = m.via && m.via !== 'offline' ? '  · via ' + m.via : '';
-      const label = (icons[m.kind]||'•') + ' current guidance' + (m.line ? '  · line '+m.line : '') + viaTag;
+      const stateTag = m.intervention ? '  · detected ' + m.intervention.learner_state.replace('_',' ') : '';
+      const label = (icons[m.kind]||'•') + ' current guidance' + (m.line ? '  · line '+m.line : '') + stateTag + viaTag;
       showCurrent(m, label);
+      addInterventionActions(m);
     } else if (d.type === 'resetGuidance') {
       activeCoach = null;
       guidance.replaceChildren();
@@ -379,11 +407,17 @@ export class MentorPanel {
       feed.appendChild(empty);
       setHistoryOpen(false);
       updateHistoryCount();
+      document.getElementById('readiness').replaceChildren();
+    } else if (d.type === 'lessonFile') {
+      document.getElementById('lesson-file').textContent = 'Lesson file: ' + d.name;
+    } else if (d.type === 'clearReadiness') {
+      document.getElementById('readiness').replaceChildren();
     } else if (d.type === 'blueprint') {
       blueprintSteps = d.steps || []; renderBlueprint();
     } else if (d.type === 'lessonProgress') {
       currentStep = d.currentStep || 0; completedSteps = d.completedSteps || []; renderBlueprint();
     } else if (d.type === 'lessonCheck') {
+      document.getElementById('readiness').replaceChildren();
       const lines = [d.passed ? 'Lesson complete' : 'Lesson check'];
       (d.checks||[]).forEach(c => lines.push((c.passed?'✓ ':'○ ')+c.label));
       if (d.passed && d.next) lines.push('Up next: '+d.next.module_title+' — '+d.next.goal);
@@ -408,13 +442,10 @@ export class MentorPanel {
     } else if (d.type === 'thinking') {
       typing.textContent = d.on ? 'CodeTutor is thinking…' : '';
     } else if (d.type === 'readyToRun') {
-      showCurrent({kind:'next_step', text:'Your code meets this lesson’s structural requirements. Run it with a normal input and an edge case. When it behaves as expected, verify completion below.'},
-        '▶ ready to run');
-      addGuidanceAction('I ran it successfully — verify', 'confirmRun', true);
+      const readiness = document.getElementById('readiness');
+      readiness.textContent = 'Ready to test: run a normal input and an invalid input, then use Run lesson check.';
     } else if (d.type === 'runSucceeded') {
-      showCurrent({kind:'next_step', text:'VS Code observed a successful Python command for this lesson file. Confirm that its behavior matched what you expected, then verify the lesson.'},
-        '✓ Python run finished');
-      addGuidanceAction('Verify completion & continue', 'confirmRun', true);
+      document.getElementById('readiness').textContent = 'Python run finished. Verify the expected behavior using Run lesson check.';
     }
   });
 

@@ -11,6 +11,15 @@ export interface MentorMessage {
   via?: string;
   replacement?: string;
   escalation_level?: number;
+  intervention?: {
+    learner_state: "progressing" | "thinking" | "stuck" | "off_path" | "error" | "finished";
+    confidence: number;
+    evidence: string[];
+    should_intervene: boolean;
+    hint_level: number;
+    actions: Array<"another_hint" | "similar_example" | "wait" | "fix_and_explain">;
+    intervention_id: string;
+  };
   lesson_progress?: {
     current_step: number;
     completed_steps: number[];
@@ -25,6 +34,8 @@ export interface EventOptions {
   line?: number; // for "why" (1-based)
   symbol?: string; // for "why"
   question?: string; // for "ask"
+  interventionId?: string;
+  helpful?: boolean;
 }
 
 export interface GoalSuggestion {
@@ -92,6 +103,12 @@ export interface HealthResponse {
 
 export class MentorClient {
   constructor(private baseUrl: string, private timeoutMs = 30_000) {}
+
+  private lessonContext?: () => { sessionId: string; fileUri: string; version: number } | undefined;
+
+  bindLessonContext(read: () => { sessionId: string; fileUri: string; version: number } | undefined): void {
+    this.lessonContext = read;
+  }
 
   private async fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
     const controller = new AbortController();
@@ -189,10 +206,12 @@ export class MentorClient {
 
   async sendEvent(
     sessionId: string,
-    type: "completed" | "error" | "stuck" | "hover" | "explain" | "why" | "ask" | "fix",
+    type: "completed" | "error" | "stuck" | "hint" | "example" | "feedback" | "hover" | "explain" | "why" | "ask" | "fix",
     code: string,
     opts: EventOptions = {}
   ): Promise<MentorMessage | null> {
+    const context = this.lessonContext?.();
+    if (this.lessonContext && (!context || context.sessionId !== sessionId)) return null;
     const msg = await this.post<MentorMessage | Record<string, never>>("/event", {
       session_id: sessionId,
       type,
@@ -202,7 +221,14 @@ export class MentorClient {
       line: opts.line,
       symbol: opts.symbol,
       question: opts.question,
+      intervention_id: opts.interventionId,
+      helpful: opts.helpful,
+      file_uri: context?.fileUri,
+      document_version: context?.version,
     });
+    const current = this.lessonContext?.();
+    if (context && (!current || current.sessionId !== context.sessionId ||
+        current.fileUri !== context.fileUri || current.version !== context.version)) return null;
     if (!msg || !(msg as MentorMessage).kind) {
       return null;
     }

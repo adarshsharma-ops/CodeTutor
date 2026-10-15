@@ -192,6 +192,11 @@ of silently resetting the learner to step one. The saved code value is a short f
 rather than a second copy of the source; the current file is evaluated again on return.
 
 Guided projects expose **Run lesson check** in the mentor panel and Command Palette.
+The panel shows the lesson's attached Python filename. Opening another Python file will
+not silently change the tutor's context. To switch files or attach a saved untitled file,
+open it and run **CodeTutor: Use current Python file for this lesson**. Readiness appears
+as a status beside lesson actions, leaving Current Guidance available to read.
+
 Completion is deterministic: project-specific checks must pass, the Python must parse,
 and the learner must confirm that they exercised the program successfully. The LLM does
 not award completion. A passing lesson presents **Next lesson** and **Review what I
@@ -204,15 +209,18 @@ learned**, while retaining the learner's broader progress.
 │  VS Code extension │ ────────► │  Python mentor service │ ────────► │  LLM (OpenAI-        │
 │  (thin: eyes/mouth)│           │  (the brain)           │           │  compatible endpoint)│
 │  • edit/idle/action│ ◄──────── │  • blueprint + state   │ ◄──────── │  or a private        │
-│  • inline hints    │  message  │  • linter (typos)      │  reply    │  gateway             │
-│  • side panel      │           │  • LLM reasoning       │           └──────────────────────┘
+│  • inline hints    │  message  │  • intervention engine │  reply    │  gateway             │
+│  • side panel      │           │  • parser + LLM        │           └──────────────────────┘
 └────────────────────┘           └───────────────────────┘
 ```
 
 - **The editor is a client** - it runs on each laptop, detects triggers, renders hints.
   It holds *no* intelligence.
-- **The Python service is the brain** - blueprint, lesson-plan state, curiosity meter.
-  The cheap deterministic layer (Python's own parser) finds typos/syntax errors; the
+- **The Python service is the brain** - blueprint, lesson-plan state, curiosity meter,
+  and a model-independent intervention engine. Python structure, edit progress, pause
+  duration, lesson position, and earlier hints classify the learner as progressing,
+  thinking, stuck, off-path, or facing an error before the model is called. The
+  deterministic layer (Python's own parser) finds typos/syntax errors; the
   **LLM is reserved for open-ended teaching** (blueprint, next-step reasoning, nudges,
   phrasing error explanations). This keeps it fast, cheap, and accurate.
 - **The LLM is config-driven** - use Anthropic directly or point `OPENAI_BASE_URL` at
@@ -231,9 +239,16 @@ volume) when you repeat a mistake. That's where the effort went.
 
 **Two layers, split on purpose.** A cheap deterministic layer (Python's own parser)
 handles what parsers do better than any model - finding typos, judging whether a line is
-finished, extracting concepts. The LLM is reserved for open-ended teaching. Routing every
+finished, extracting concepts, and deciding whether there is enough evidence to interrupt.
+The LLM is reserved for open-ended teaching. Routing every
 keystroke through a model would be slow, expensive, and would hallucinate syntax rules;
 this split avoids all three.
+
+**The learner controls escalation.** Current Guidance offers another hint, a comparable
+example, or a quiet minute to keep trying. Help progresses from a nudge to a concept, a
+smallest-change description, and then an analogous example. Direct code repair remains a
+separate, explicit, confirmation-gated action. Code changes after guidance are recorded
+as progress; requesting deeper help records that the previous hint was insufficient.
 
 **Multi-provider, switchable at runtime.** `llm.py` supports **Anthropic (Claude)**
 natively (Messages API) *and* any **OpenAI-compatible** endpoint (OpenAI, Azure, Ollama,
@@ -340,6 +355,7 @@ Runs in **offline/mock mode**. To use a real model, put a key in `.env` - either
 
 ```bash
 python3 eval_harness.py --out report.md          # offline baseline
+python3 intervention_eval.py                     # replay interruption decisions
 # then, with a real model configured:
 python3 eval_harness.py --out report_llm.md      # real explanations to read critically
 ```

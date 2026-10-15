@@ -31,6 +31,64 @@ def test_blueprint_produces_steps(tmp_path):
     assert len(s.blueprint) >= 3
 
 
+def test_pasted_code_takes_priority_over_an_unrelated_editor_snapshot(tmp_path):
+    from test_session_regressions import SCRIPT
+    m = _mentor(tmp_path)
+    session = Session(goal="temperature converter", learner_level="beginner")
+    m.blueprint(session)
+    message = m.ask(session, "This is my full code: " + SCRIPT,
+                    "vscode_lsp_terminal_prompt_tracker = {}")
+    assert "reviewing the code you pasted" in message.text.lower()
+    assert "result" in message.text
+    assert "no value" in message.text
+    assert "function receives" not in message.text
+
+
+def test_converter_guidance_follows_structure_with_renamed_variables(tmp_path):
+    from test_session_regressions import SCRIPT
+    m = _mentor(tmp_path)
+    session = Session(goal="temperature converter", learner_level="beginner")
+    m.blueprint(session)
+    code = SCRIPT.replace('    print("Please enter C or F")', '    raise ValueError("C or F")')
+    msg = m.on_completed_line(session, code)
+    assert session.current_step == 5
+    assert "test" in msg.text.lower()
+
+
+def test_pasted_code_does_not_accidentally_start_guided_function(tmp_path):
+    m = _mentor(tmp_path)
+    session = Session(goal="temperature converter", learner_level="beginner")
+    msg = m.ask(session, 'This is my full code: choice = input("Convert Celsius or Fahrenheit?")', "")
+    assert session.guided_subgoal == ""
+    assert "reviewing" in msg.text.lower()
+
+
+def test_choice_only_input_does_not_get_mistaken_for_temperature(tmp_path):
+    m = _mentor(tmp_path)
+    session = Session(goal="temperature converter", learner_level="beginner")
+    m.blueprint(session)
+    message = m.on_completed_line(session, 'choice = input("Convert (C)elsius to Fahrenheit or (F)ahrenheit to Celsius? ")')
+    assert session.current_step == 0
+    assert "ask for the temperature" in message.text.lower()
+
+
+def test_explicit_error_question_takes_priority_over_understanding_quiz(tmp_path):
+    from test_session_regressions import SCRIPT
+    m = _mentor(tmp_path)
+    session = Session(goal="temperature converter", awaiting_understanding="old_issue")
+    message = m.ask(session, "what is wrong in the current code", SCRIPT)
+    assert "result" in message.text
+    assert "no value" in message.text
+
+
+def test_equivalent_completed_guided_function_does_not_repeat_return_hint(tmp_path):
+    m = _mentor(tmp_path)
+    session = Session(goal="temperature converter", guided_subgoal="celsius_to_fahrenheit")
+    message = m.on_stuck(session, 'def celsius_to_fahrenheit(celsius):\n    return 32 + 1.8 * celsius', 10)
+    assert session.guided_subgoal == ""
+    assert "now returns" in message.text
+
+
 def test_blueprint_parser_caps_steps_and_drops_conversation():
     raw = "\n".join([f"{i}. Step {i}" for i in range(1, 11)] + ["11. Want to begin?"])
     steps = _parse_steps(raw)
@@ -117,6 +175,43 @@ def test_stuck_on_unfinished_loop(tmp_path):
     msg = m.on_stuck(_session(), 'c = ["London"]\nfor i in ', idle_seconds=10)
     assert msg.kind == "stuck"
     assert "go through one item at a time" in msg.text.lower()
+
+
+def test_stuck_response_exposes_model_independent_decision_and_controls(tmp_path):
+    m = _mentor(tmp_path)
+    msg = m.on_stuck(_session(), 'c = ["London"]\nfor i in ', idle_seconds=10)
+    assert msg.intervention
+    assert msg.intervention["learner_state"] == "stuck"
+    assert msg.intervention["confidence"] >= 0.9
+    assert {"another_hint", "similar_example", "wait"} <= set(msg.intervention["actions"])
+
+
+def test_ambiguous_advanced_pause_does_not_invent_the_next_step(tmp_path):
+    m = _mentor(tmp_path)
+    session = Session(goal="build a production API", learner_level="advanced")
+    msg = m.on_stuck(session, "name = input('Name: ')", idle_seconds=10)
+    assert msg.intervention["learner_state"] == "thinking"
+    assert "don't see a verified error" in msg.text.lower()
+
+
+def test_explicit_example_request_jumps_to_analogous_example_level(tmp_path):
+    m = _mentor(tmp_path)
+    session = _session()
+    msg = m.on_stuck(session, "total = ", idle_seconds=10,
+                     help_action="similar_example")
+    assert msg.escalation_level == 4
+    assert "def double(number)" in msg.text
+
+
+def test_similar_example_does_not_reveal_guided_converter_solution(tmp_path):
+    m = _mentor(tmp_path)
+    session = Session(goal="temperature converter Celsius to Fahrenheit",
+                      learner_level="beginner", guided_subgoal="celsius_to_fahrenheit")
+    code = "def celsius_to_fahrenheit(celsius):"
+    msg = m.on_stuck(session, code, idle_seconds=10,
+                     help_action="similar_example")
+    assert "def double(number)" in msg.text
+    assert "return (celsius" not in msg.text
 
 
 def test_stuck_mid_condition_teaches_operator_choice(tmp_path):

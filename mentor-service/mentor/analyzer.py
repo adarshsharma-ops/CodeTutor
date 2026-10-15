@@ -15,6 +15,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
+from .program_evidence import conditional_assignment_issues, converter_mapping_issues
 
 
 @dataclass
@@ -98,6 +99,21 @@ def analyze(source: str) -> Analysis:
         misconceptions = detect_misconceptions(tree)
         fingerprints = concept_fingerprints(tree, imports)
         context_issues = detect_context_issues(tree)
+        for line, explanation in converter_mapping_issues(tree):
+            context_issues.insert(0, ContextIssue(
+                code="conversion_direction_mismatch", line=line, related_line=line,
+                summary="The formula does not match the conversion selected in the prompt",
+                explanation=explanation,
+            ))
+        for line, name in conditional_assignment_issues(tree):
+            context_issues.insert(0, ContextIssue(
+                code="conditionally_unassigned", line=line, related_line=line,
+                summary=f"`{name}` has no value on at least one branch",
+                explanation=(f"One branch continues without assigning `{name}`, but line {line} "
+                             f"reads it. On that path Python raises a NameError or UnboundLocalError. "
+                             "Display the result only in branches that create it, assign a suitable "
+                             "value on every continuing path, or stop the invalid-input path first."),
+            ))
         verified_facts = structural_facts(tree)
     else:
         verified_facts = []

@@ -13,6 +13,10 @@
   "contributes": {
     "commands": [
       {
+        "command": "codetutor.attachLessonFile",
+        "title": "CodeTutor: Use current Python file for this lesson"
+      },
+      {
         "command": "codetutor.start",
         "title": "CodeTutor: Start a new learning journey"
       },
@@ -135,6 +139,7 @@
     }
   },
   "scripts": {
+    "test": "npm run compile && node --test tests/*.test.cjs",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./"
   },

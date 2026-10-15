@@ -31,6 +31,9 @@ class Session:
     current_step: int = 0
     guided_subgoal: str = ""             # explicit learner request currently being coached
     last_recorded_error_code: str = ""   # unchanged polling must not inflate recurrence
+    last_intervention_id: str = ""
+    last_intervention_code: str = ""
+    intervention_outcomes: Dict[str, str] = field(default_factory=dict)
 
     # Curiosity meter / fade-over-time bookkeeping.
     seen_imports: Set[str] = field(default_factory=set)
@@ -48,11 +51,27 @@ class Session:
         normalized = "\n".join(line.rstrip() for line in code.strip().splitlines())
         changed = normalized != self.progress_code
         if changed:
+            if self.last_intervention_id and self.last_intervention_code != normalized:
+                self.intervention_outcomes[self.last_intervention_id] = "progressed"
             self.progress_code = normalized
             self.hint_levels.clear()
             self.recent_advice.clear()
             self.last_recorded_error_code = ""
         return changed
+
+    def record_intervention(self, intervention_id: str, code: str) -> None:
+        """Remember the snapshot so a later edit can count as useful progress."""
+        self.last_intervention_id = intervention_id
+        self.last_intervention_code = "\n".join(
+            line.rstrip() for line in code.strip().splitlines()
+        )
+        self.intervention_outcomes.setdefault(intervention_id, "shown")
+
+    def record_intervention_feedback(self, intervention_id: str, helpful: bool) -> None:
+        if intervention_id:
+            self.intervention_outcomes[intervention_id] = (
+                "helpful" if helpful else "not_helpful"
+            )
 
     def remember_advice(self, key: str) -> bool:
         """Return False when the same advice was emitted very recently."""

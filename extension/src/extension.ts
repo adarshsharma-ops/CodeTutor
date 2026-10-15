@@ -33,6 +33,10 @@ let automaticRequestInFlight = false; // never stack completed/stuck interventio
 let explicitRequestInFlight = false; // learner questions always take priority over automation
 let lastSurfacedFingerprint = ""; // prevent duplicate advice from reaching both UI surfaces
 let lastAutomaticGuidanceAt = 0; // current guidance receives a real reading/application window
+let guidanceDeferredUntil = 0; // learner explicitly asked the tutor to wait
+let lastInterventionId = "";
+let lastGuidanceLine: number | undefined;
+let guidanceRequestEpoch = 0; // explicit learner requests supersede automatic responses
 let providerLabel = "";
 type LearnerLevel = "beginner" | "intermediate" | "advanced";
 let learnerLevel: LearnerLevel = "beginner";
@@ -116,9 +120,8 @@ function scopeCode(document: vscode.TextDocument, position?: vscode.Position): S
 // Current Python buffer text to send, robust to focus being in the chat panel,
 // honoring never-send patterns and the function-only scope.
 function currentCode(): string {
-  const active = vscode.window.activeTextEditor?.document;
-  const doc = active?.languageId === "python" ? active : lastPyDoc;
-  if (!doc || sendingBlocked(doc)) return "";
+  const doc = lastPyDoc;
+  if (!doc || doc.isClosed || sendingBlocked(doc)) return "";
   return scopeCode(doc).text;
 }
 
@@ -164,6 +167,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codetutor.start", () => requestManualStart(context)),
+    vscode.commands.registerCommand("codetutor.attachLessonFile", attachCurrentLessonFile),
     vscode.commands.registerCommand("codetutor.explainLine", explainLine),
     vscode.commands.registerCommand("codetutor.askLine", askLine),
     vscode.commands.registerCommand("codetutor.fixLine", fixLine),
@@ -180,7 +184,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("codetutor.togglePause", togglePause),
     vscode.workspace.onDidChangeTextDocument(onEdit),
     vscode.window.onDidChangeActiveTextEditor((ed) => {
-      if (ed?.document.languageId === "python") {
+      if (!sessionId && ed?.document.languageId === "python") {
         lastPyDoc = ed.document;
         maybeAutoStart();
       }
@@ -580,11 +584,18 @@ async function startSession(context: vscode.ExtensionContext, manual: boolean, f
 
 async function attachSession(context: vscode.ExtensionContext, res: SessionResponse | ResumeResponse,
                              resumed: boolean) {
+  if (idleTimer) clearTimeout(idleTimer);
+  if (debounceTimer) clearTimeout(debounceTimer);
+  guidanceRequestEpoch++;
+  lastPyDoc = undefined;
   panel = MentorPanel.show(context, handleAsk, handlePanelAction);
   sessionId = res.session_id;
   learningPath = (res.pathway_id === "ai-engineer" ? "ai-engineer" : learningPath);
   selectedModuleId = res.module_id || selectedModuleId;
   lastAutomaticGuidanceAt = 0;
+  guidanceDeferredUntil = 0;
+  lastInterventionId = "";
+  lastGuidanceLine = undefined;
   lastSurfacedFingerprint = "";
   panel.resetGuidance();
   readinessPrompted = false;
@@ -607,6 +618,10 @@ async function attachSession(context: vscode.ExtensionContext, res: SessionRespo
   const pyEditor = await ensureLessonEditor(res, resumed);
   const existing = pyEditor.document.getText();
   if (pyEditor) lastPyDoc = pyEditor.document;
+  panel.setLessonFile(path.basename(pyEditor.document.fileName));
+  client.bindLessonContext(() => sessionId && lastPyDoc && !lastPyDoc.isClosed
+    ? { sessionId, fileUri: lastPyDoc.uri.toString(), version: lastPyDoc.version }
+    : undefined);
   if (pyEditor && existing.split("\n").filter((l) => l.trim()).length >= 2) {
     lastHintedCode = existing; lastHintAt = Date.now();
     react(pyEditor, existing, "completed");
@@ -666,14 +681,73 @@ async function handlePanelAction(action: string) {
   else if (action === "confirmRun") await checkCurrentLesson(true);
   else if (action === "next") await startNextLesson();
   else if (action === "review") await showProgress();
+  else if (action === "another_hint") await requestInterventionHelp("hint");
+  else if (action === "similar_example") await requestInterventionHelp("example");
+  else if (action === "wait") {
+    guidanceDeferredUntil = Date.now() + 60_000;
+    if (idleTimer) clearTimeout(idleTimer);
+    vscode.window.showInformationMessage("CodeTutor will stay quiet for one minute or until you edit the code.");
+  } else if (action === "fix_and_explain") {
+    if (lastPyDoc && !lastPyDoc.isClosed) await vscode.window.showTextDocument(lastPyDoc, vscode.ViewColumn.One);
+    await fixLine(lastGuidanceLine ? lastGuidanceLine - 1 : undefined);
+  }
+}
+
+async function attachCurrentLessonFile() {
+  const editor = vscode.window.activeTextEditor;
+  if (!sessionId || editor?.document.languageId !== "python") {
+    vscode.window.showInformationMessage("Open the Python file for your active lesson first.");
+    return;
+  }
+  if (!outboundAllowed(editor.document, true)) return;
+  lastPyDoc = editor.document;
+  lastSurfacedFingerprint = "";
+  lastHintedCode = "";
+  lastAutomaticGuidanceAt = 0;
+  readinessPrompted = false;
+  panel?.setLessonFile(path.basename(editor.document.fileName));
+  panel?.clearReadiness();
+  const idleMs = vscode.workspace.getConfiguration("codetutor").get<number>("idleSeconds", 10) * 1000;
+  scheduleStallCheck(editor, 0, idleMs);
+}
+
+async function requestInterventionHelp(type: "hint" | "example") {
+  const editor = vscode.window.visibleTextEditors.find((candidate) => candidate.document === lastPyDoc);
+  if (!editor || !sessionId || !outboundAllowed(editor.document, true)) return;
+  const requestedSession = sessionId;
+  const requestedVersion = editor.document.version;
+  explicitRequestInFlight = true;
+  guidanceRequestEpoch++;
+  try {
+    const scoped = scopeCode(editor.document, editor.selection.active);
+    const idle = vscode.workspace.getConfiguration("codetutor").get<number>("idleSeconds", 10);
+    if (lastInterventionId) {
+      // Asking for deeper help is useful outcome evidence: the previous intervention
+      // was insufficient even if it was directionally correct.
+      await client.sendEvent(sessionId, "feedback", scoped.text, {
+        interventionId: lastInterventionId, helpful: false,
+      });
+    }
+    const msg = await client.sendEvent(sessionId, type, scoped.text, { idleSeconds: idle });
+    if (sessionId !== requestedSession || editor.document.version !== requestedVersion) return;
+    if (msg) {
+      if (msg.line && scoped.startLine) msg.line += scoped.startLine;
+      surface(editor, msg, false);
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(friendlyError(err));
+  } finally {
+    explicitRequestInFlight = false;
+  }
 }
 
 async function checkCurrentLesson(runAlreadyConfirmed = false) {
   if (!sessionId) { vscode.window.showWarningMessage("Start or resume a CodeTutor lesson first."); return; }
   // Completion is a whole-program claim. Never apply the privacy-oriented
   // function-only scope here or valid project behavior outside that function vanishes.
-  const doc = vscode.window.activeTextEditor?.document.languageId === "python"
-    ? vscode.window.activeTextEditor.document : lastPyDoc;
+  const doc = lastPyDoc;
+  const requestedSession = sessionId;
+  const requestedVersion = doc?.version;
   const code = doc && !sendingBlocked(doc) ? doc.getText() : "";
   if (!code.trim()) { vscode.window.showWarningMessage("Add some Python code before running the lesson check."); return; }
   let runPassed = runAlreadyConfirmed;
@@ -687,8 +761,9 @@ async function checkCurrentLesson(runAlreadyConfirmed = false) {
     runPassed = run.value;
   }
   try {
-    const uri = vscode.window.activeTextEditor?.document.uri.toString() || lastPyDoc?.uri.toString() || "";
+    const uri = doc?.uri.toString() || "";
     const result = await client.checkLesson(sessionId, code, runPassed, uri);
+    if (sessionId !== requestedSession || doc?.version !== requestedVersion) return;
     nextLesson = result.next;
     panel?.showLessonCheck(result.checks, result.passed, result.next);
     if (result.passed) vscode.window.showInformationMessage("Lesson complete. Choose Next lesson when you're ready.");
@@ -757,8 +832,11 @@ async function changeLevel() {
 // The chat input: the learner typed a free-form question in the panel.
 async function handleAsk(text: string) {
   if (!sessionId) return;
-  const active = vscode.window.activeTextEditor?.document;
-  if (!outboundAllowed(active?.languageId === "python" ? active : lastPyDoc)) {
+  if (!lastPyDoc || lastPyDoc.isClosed) {
+    panel?.push({kind: "answer", text: "The lesson file has been closed or saved under a new name. Open the lesson's Python file, then run CodeTutor: Use current Python file for this lesson."});
+    return;
+  }
+  if (!outboundAllowed(lastPyDoc)) {
     if (panel) {
       panel.thinking(false);
       panel.push({ kind: "answer", text: "CodeTutor is paused, so I did not send your question or code. Resume from the status bar when you're ready." });
@@ -766,12 +844,21 @@ async function handleAsk(text: string) {
     return;
   }
   const code = currentCode();
+  const requestedDoc = lastPyDoc;
+  const requestedVersion = requestedDoc.version;
+  const requestedSession = sessionId;
   explicitRequestInFlight = true;
+  guidanceRequestEpoch++;
   try {
     const msg = await client.sendEvent(sessionId, "ask", code, { question: text });
+    if (sessionId !== requestedSession || requestedDoc !== lastPyDoc || requestedDoc.version !== requestedVersion) {
+      panel?.thinking(false);
+      return;
+    }
     if (msg && panel) {
       applyLessonMetadata(msg, code);
       panel.push(msg);
+      lastAutomaticGuidanceAt = Date.now();
     }
     else if (panel) panel.thinking(false);
   } catch (err) {
@@ -828,9 +915,10 @@ async function pickGoal(): Promise<string | undefined> {
 
 function onEdit(e: vscode.TextDocumentChangeEvent) {
   if (e.document.languageId !== "python") return;
+  if (sessionId && e.document !== lastPyDoc) return;
   if (!outboundAllowed(e.document)) return;
   lastPyDoc = e.document;
-  if (lastReadyCode && e.document.getText() !== lastReadyCode) readinessPrompted = false;
+  guidanceDeferredUntil = 0;
   // First time typing in Python with no session yet -> auto-start (asks the goal once).
   if (!sessionId) {
     maybeAutoStart();
@@ -881,7 +969,8 @@ function scheduleStallCheck(editor: vscode.TextEditor, startLine: number, idleMs
   const readingMs = vscode.workspace.getConfiguration("codetutor")
     .get<number>("guidanceReadingSeconds", 25) * 1000;
   const readingRemaining = Math.max(0, lastAutomaticGuidanceAt + readingMs - Date.now());
-  const delayMs = Math.max(idleMs, readingRemaining);
+  const deferredRemaining = Math.max(0, guidanceDeferredUntil - Date.now());
+  const delayMs = Math.max(idleMs, readingRemaining, deferredRemaining);
   idleTimer = setTimeout(async () => {
     if (editor.document.version !== version || paused || !sessionId) return;
     const scoped = scopeCode(editor.document, editor.selection.active);
@@ -914,10 +1003,14 @@ async function react(
   const readingMs = vscode.workspace.getConfiguration("codetutor")
     .get<number>("guidanceReadingSeconds", 25) * 1000;
   if (!sessionId || !outboundAllowed(editor.document) || automaticRequestInFlight || explicitRequestInFlight) return null;
+  if (editor.document !== lastPyDoc) return null;
+  if (Date.now() < guidanceDeferredUntil) return null;
   if (lastAutomaticGuidanceAt && Date.now() - lastAutomaticGuidanceAt < readingMs) return null;
   automaticRequestInFlight = true;
   const requestedVersion = editor.document.version;
   const requestedUri = editor.document.uri.toString();
+  const requestedSession = sessionId;
+  const requestedEpoch = guidanceRequestEpoch;
   try {
     const idle = vscode.workspace.getConfiguration("codetutor").get<number>("idleSeconds", 10);
     const msg = await client.sendEvent(sessionId, type, code,
@@ -925,7 +1018,7 @@ async function react(
     if (msg) {
       // The learner may keep typing while a model responds. Never show advice for an
       // older snapshot as though it describes the current editor.
-      if (editor.document.uri.toString() !== requestedUri || editor.document.version !== requestedVersion) {
+      if (guidanceRequestEpoch !== requestedEpoch || sessionId !== requestedSession || editor.document !== lastPyDoc || editor.document.uri.toString() !== requestedUri || editor.document.version !== requestedVersion) {
         return null;
       }
       if (msg.line && startLine) msg.line += startLine;
@@ -943,7 +1036,7 @@ async function react(
 
 class TutorCodeActions implements vscode.CodeActionProvider {
   provideCodeActions(document: vscode.TextDocument, range: vscode.Range): vscode.CodeAction[] {
-    if (!sessionId || !outboundAllowed(document)) return [];
+    if (!sessionId || document !== lastPyDoc || !outboundAllowed(document)) return [];
     const explain = new vscode.CodeAction("CodeTutor: Explain this line", vscode.CodeActionKind.QuickFix);
     explain.command = { command: "codetutor.explainLine", title: "Explain this line" };
     const ask = new vscode.CodeAction("CodeTutor: Ask about this line", vscode.CodeActionKind.QuickFix);
@@ -961,9 +1054,11 @@ function surface(editor: vscode.TextEditor, msg: MentorMessage, automatic = true
   const fingerprint = `${msg.kind}:${msg.line || 0}:${msg.headline || msg.text}`;
   if (fingerprint === lastSurfacedFingerprint) return;
   lastSurfacedFingerprint = fingerprint;
+  if (msg.intervention) lastInterventionId = msg.intervention.intervention_id;
+  if (msg.line) lastGuidanceLine = msg.line;
   // Full what/why/how goes to the chat panel.
   if (panel) automatic ? panel.coach(msg) : panel.push(msg);
-  if (automatic) lastAutomaticGuidanceAt = Date.now();
+  lastAutomaticGuidanceAt = Date.now();
 
   // Short hint renders as a CodeLens one line ABOVE the relevant code line.
   // Prefer the mentor's purpose-built headline (guaranteed short, never truncated);
@@ -1004,15 +1099,17 @@ function applyLessonMetadata(msg: MentorMessage, code: string) {
     );
   }
   const ready = msg.lesson_readiness;
-  if (!ready || ready.passed || !code || code === lastReadyCode || readinessPrompted) return;
+  if (!ready || !code) return;
   const failed = ready.checks.filter((check) => !check.passed);
   if (failed.length === 1 && failed[0].id === "run") {
     lastReadyCode = code;
+    if (readinessPrompted) return;
     readinessPrompted = true;
     panel?.showReadyToRun(false);
-    vscode.window.showInformationMessage(
-      "CodeTutor: the lesson is ready to run. After testing it, choose Run lesson check."
-    );
+  } else if (failed.some(check => check.id !== "run")) {
+    readinessPrompted = false;
+    lastReadyCode = "";
+    panel?.clearReadiness();
   }
 }
 
@@ -1027,7 +1124,7 @@ async function provideHover(
   document: vscode.TextDocument,
   position: vscode.Position
 ): Promise<vscode.Hover | undefined> {
-  if (!sessionId || !outboundAllowed(document)) return undefined;
+  if (!sessionId || document !== lastPyDoc || !outboundAllowed(document)) return undefined;
   // A hover can otherwise transmit the whole buffer merely because the pointer moved.
   // Keep that behavior opt-in; the explicit "Why is this line here?" command remains
   // available for privacy-conscious use.
@@ -1057,6 +1154,7 @@ async function provideHover(
 // Command: explain the line the cursor is on (same "why" reasoning, on demand).
 async function explainLine() {
   const editor = vscode.window.activeTextEditor;
+  if (sessionId && editor?.document !== lastPyDoc) return;
   if (!editor || !sessionId) {
     vscode.window.showWarningMessage("Start a CodeTutor session first.");
     return;
@@ -1077,6 +1175,7 @@ async function explainLine() {
 
 async function askLine(lineArg?: number) {
   const editor = vscode.window.activeTextEditor;
+  if (sessionId && editor?.document !== lastPyDoc) return;
   if (!editor || !sessionId) {
     vscode.window.showWarningMessage("Start a CodeTutor session first.");
     return;
@@ -1103,6 +1202,7 @@ async function askLine(lineArg?: number) {
 
 async function fixLine(lineArg?: number) {
   const editor = vscode.window.activeTextEditor;
+  if (sessionId && editor?.document !== lastPyDoc) return;
   if (!editor || !sessionId) {
     vscode.window.showWarningMessage("Start a CodeTutor session first.");
     return;
@@ -1120,11 +1220,16 @@ async function fixLine(lineArg?: number) {
       return;
     }
     const current = editor.document.lineAt(documentLine).text;
+    const requestedVersion = editor.document.version;
     const choice = await vscode.window.showInformationMessage(
       `CodeTutor proposes:\n${current.trim()}  →  ${msg.replacement.trim()}`,
       { modal: true, detail: msg.text }, "Apply fix"
     );
     if (choice !== "Apply fix") return;
+    if (editor.document.version !== requestedVersion) {
+      vscode.window.showInformationMessage("Your code changed while the fix was open. Ask for a fresh fix.");
+      return;
+    }
     const edit = new vscode.WorkspaceEdit();
     edit.replace(editor.document.uri, editor.document.lineAt(documentLine).range, msg.replacement);
     if (await vscode.workspace.applyEdit(edit)) {

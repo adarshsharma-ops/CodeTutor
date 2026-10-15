@@ -2,6 +2,27 @@
 
 CodeTutor treats model output as an explanation candidate, not as ground truth.
 
+## Lesson context and transcript regressions
+
+The selected lesson remains attached to its Python document when focus moves to chat,
+another file, or an editor-generated buffer. The panel displays the attached filename.
+Use **CodeTutor: Use current Python file for this lesson** to attach a different file or
+the saved copy of an untitled file. Event requests carry the file identity and editor
+version; responses are discarded if that context changes while the request is running.
+Explicitly pasted Python is reviewed as a snippet and does not award completion in the
+attached lesson file. Empty source no longer falls back to an older nonempty snapshot.
+
+The converter's guided step order is fixed so blueprint and progress agree. Scripts are
+valid unless the goal explicitly requests functions. Parsed arithmetic recognises
+equivalent linear conversion formulas without executing learner code or depending on
+variable names. A conservative check identifies values created on only some continuing
+conditional paths and read afterward. An explicit menu defining C/F conversion directions
+can also be checked against its branch formulas. Ambiguous menus are not assumed wrong.
+
+These are structural checks, not exhaustive behavioral verification. Unusual control
+flow, dynamically built formulas, and ambiguous intent still need learner tests and
+careful review. Readiness remains a status message; it does not replace the current hint.
+
 ## Reliability pipeline
 
 1. Python's parser and AST establish syntax, class structure, method placement, loop
@@ -52,10 +73,23 @@ learner to store or display its returned value.
 ## Quiet intervention model
 
 Automatic completed-line, syntax, semantic, and idle signals share one intervention
-lifecycle. The extension waits through a short composition grace period, discards advice
+lifecycle. Before any model is called, the Adaptive Intervention Engine classifies the
+observable learner state as **progressing, thinking, stuck, off-path, or error** and
+records a confidence score plus the parser/edit evidence behind it. Verified syntax and
+structural issues may intervene immediately. An ambiguous pause produces a small
+choice-based check-in instead of an invented diagnosis.
+
+The extension waits through a short composition grace period, discards advice
 for changed editor versions, and replaces one active coaching card instead of appending
 every automatic observation to chat history. Explicit learner questions remain in the
 conversation history.
+
+Current Guidance gives the learner control over the assistance ladder: **another hint**,
+**similar example**, or **let me keep trying**. The latter suppresses automatic help for
+one minute or until the next edit. A direct repair remains available only for a verified
+line error and still requires confirmation. If code changes after an intervention, the
+session records progress; requesting deeper help records that the prior hint was
+insufficient. This evidence is local session state and is not external analytics.
 
 Syntax and semantic facts take priority over generic idle guidance. Opening an indented
 block is treated as normal composition, and repeated polling of unchanged incomplete code
@@ -73,6 +107,7 @@ From `mentor-service`:
 
 ```bash
 python3 eval_harness.py --out report.md
+python3 intervention_eval.py
 ```
 
 Run the same scenario set once per candidate model and compare the reports. The harness

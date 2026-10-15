@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from .program_evidence import converter_evidence, conditional_assignment_issues, converter_mapping_issues
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -277,12 +278,17 @@ def evaluate_project(goal: str, code: str, run_passed: bool = False) -> dict:
             {"id": "invalid", "label": "Handles an invalid choice", "passed": "invalid" in text and "else" in text},
         ]
     elif project == "temperature-converter":
+        evidence = converter_evidence(tree)
         checks += [
-            {"id": "function", "label": "Defines a conversion function", "passed": bool(tree and any(isinstance(n, ast.FunctionDef) for n in ast.walk(tree)))},
-            {"id": "formula", "label": "Uses a Celsius/Fahrenheit formula", "passed": ("9" in text and "5" in text and "32" in text)},
-            {"id": "input", "label": "Accepts a value to convert", "passed": "input(" in text or bool(tree and any(isinstance(n, ast.FunctionDef) and n.args.args for n in ast.walk(tree)))},
-            {"id": "output", "label": "Returns or displays the result", "passed": "return " in text or "print(" in text},
+            {"id": "formula", "label": "Uses a structurally verified Celsius/Fahrenheit formula", "passed": bool(evidence["formulas"])},
+            {"id": "input", "label": "Accepts a value to convert", "passed": bool(tree and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "input" for n in ast.walk(tree))) or bool(evidence["functions"])},
+            {"id": "output", "label": "Returns or displays a conversion result", "passed": bool(evidence["functions"]) or bool(evidence["formulas"] and tree and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "print" for n in ast.walk(tree)))},
+            {"id": "assigned_paths", "label": "Does not read a branch result before it exists", "passed": not tree or not conditional_assignment_issues(tree)},
+            {"id": "direction", "label": "Formula directions agree with an explicit input menu", "passed": not tree or not converter_mapping_issues(tree)},
         ]
+        # A script is a valid implementation unless the stated goal teaches functions.
+        if "function" in goal.lower():
+            checks.append({"id": "function", "label": "Defines a function that returns a conversion", "passed": bool(evidence["functions"])})
     else:
         checks += [{"id": "substance", "label": "Contains an executable Python structure", "passed": bool(tree and len(tree.body) >= 2)}]
     # The same return-path protection applies to every project. A lesson may expose a more

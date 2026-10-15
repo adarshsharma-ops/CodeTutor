@@ -25,7 +25,7 @@ except ImportError as e:  # pragma: no cover
 from .config import Config
 from .llm import LLMClient, LLMError
 from .learner_model import LearnerModel
-from .mentor import Mentor
+from .mentor import Mentor, _pasted_python
 from .state import Session, SessionStore
 from .lesson_progress import (LessonProgress, LessonProgressStore, evaluate_project,
                               fingerprint, infer_project)
@@ -58,13 +58,18 @@ class SessionRequest(BaseModel):
 
 class EventRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=100)
-    type: Literal["completed", "error", "stuck", "hover", "explain", "why", "ask", "fix"]
+    type: Literal["completed", "error", "stuck", "hint", "example", "feedback",
+                  "hover", "explain", "why", "ask", "fix"]
     code: str = Field(default="", max_length=500_000)
     idle_seconds: Optional[int] = Field(default=None, ge=1, le=3600)
     target: Optional[str] = Field(default=None, max_length=200)
     line: Optional[int] = Field(default=None, ge=1)
     symbol: Optional[str] = Field(default=None, max_length=200)
     question: Optional[str] = Field(default=None, max_length=4_000)
+    intervention_id: Optional[str] = Field(default=None, max_length=100)
+    helpful: Optional[bool] = None
+    file_uri: Optional[str] = Field(default=None, max_length=2_000)
+    document_version: Optional[int] = Field(default=None, ge=0)
 
 
 class ModelRequest(BaseModel):
@@ -264,10 +269,9 @@ def event(req: EventRequest) -> dict:
     if session is None:
         raise HTTPException(status_code=404, detail="Unknown session_id")
 
-    # Remember the latest real buffer so code-free events (like "ask") have context.
-    if req.code:
-        session.last_code = req.code
-    code = req.code or session.last_code
+    # An explicitly empty document is real context, not permission to reuse old code.
+    session.last_code = req.code
+    code = req.code
 
     try:
         if req.type == "completed":
@@ -276,6 +280,19 @@ def event(req: EventRequest) -> dict:
             msg = mentor.on_error(session, code)
         elif req.type == "stuck":
             msg = mentor.on_stuck(session, code, req.idle_seconds or config.idle_seconds)
+        elif req.type in {"hint", "example"}:
+            msg = mentor.on_stuck(
+                session, code, req.idle_seconds or config.idle_seconds,
+                help_action="similar_example" if req.type == "example" else "another_hint",
+            )
+        elif req.type == "feedback":
+            if not req.intervention_id or req.helpful is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="'feedback' requires intervention_id and helpful",
+                )
+            session.record_intervention_feedback(req.intervention_id, req.helpful)
+            return {"status": "ok"}
         elif req.type == "explain":
             if not req.target:
                 raise HTTPException(status_code=400, detail="'explain' requires a target")
@@ -297,16 +314,20 @@ def event(req: EventRequest) -> dict:
     except LLMError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    progress = _save_session_progress(session, code=code)
+    if req.type == "ask" and _pasted_python(req.question or "") is not None:
+        # Reviewing a pasted example does not prove progress in the attached file.
+        return msg.to_dict() if msg else {}
+    progress = _save_session_progress(session, code=code, file_uri=req.file_uri or "")
     if msg is None:
         return {}
     response = msg.to_dict()
+    response["context"] = {"file_uri": req.file_uri, "document_version": req.document_version}
     response["lesson_progress"] = {
         "current_step": progress.current_step,
         "completed_steps": progress.completed_steps or [],
         "status": progress.status,
     }
-    if code and req.type in {"completed", "stuck", "ask"}:
+    if code and req.type in {"completed", "stuck", "hint", "example", "ask"}:
         readiness = evaluate_project(session.goal, code, run_passed=False)
         response["lesson_readiness"] = readiness
         failed_checks = [check for check in readiness["checks"] if not check["passed"]]
